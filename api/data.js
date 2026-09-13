@@ -1,20 +1,33 @@
 // api/data.js
 // Serverless function chay tren Vercel (KHONG chay trong trinh duyet nguoi
-// dung) — day la noi DUY NHAT dung Vercel Blob de doc/ghi du lieu dung chung.
+// dung) — day la noi DUY NHAT dung MongoDB de doc/ghi du lieu dung chung.
 //
-// Store "milian-blob" duoc tao o che do PRIVATE nen phai dung dung cap API
-// cho private blob: get() de doc (tra ve stream), put(..., {access:'private'})
-// de ghi — khac voi public blob (fetch thang tu URL).
+// Luu du lieu duoi dang 1 document/key trong collection "shared_data":
+//   { _id: "excludedCodes", value: [...], updatedAt }
+//   { _id: "referenceData", value: {codeMap, ratioMap, fileName}, updatedAt }
 //
 // GET  /api/data?key=excludedCodes    -> { data, exists }
 // POST /api/data?key=excludedCodes    (body: JSON bat ky) -> ghi de, tra ve { ok: true }
 //
 // Cac key hop le duoc liet ke trong ALLOWED_KEYS ben duoi — muon them 1 kho
 // du lieu dung chung moi thi them ten key vao day.
-import { put, get } from '@vercel/blob';
+import { MongoClient } from 'mongodb';
 
 const ALLOWED_KEYS = new Set(['excludedCodes', 'referenceData']);
-const PREFIX = 'nc-tool';
+const DB_NAME = 'nc_tool';
+const COLLECTION_NAME = 'shared_data';
+
+// Tai su dung ket noi giua cac lan goi ham (warm invocation) de tranh mo
+// ket noi moi moi lan — thuc hanh chuan khi dung MongoDB tren serverless.
+let clientPromise = null;
+function getClient() {
+  if (!clientPromise) {
+    const uri = process.env.MONGODB_URI;
+    if (!uri) throw new Error('Thiếu biến môi trường MONGODB_URI trên Vercel.');
+    clientPromise = new MongoClient(uri).connect();
+  }
+  return clientPromise;
+}
 
 export default async function handler(request, response) {
   response.setHeader('Access-Control-Allow-Origin', '*');
@@ -30,32 +43,16 @@ export default async function handler(request, response) {
     return response.status(400).json({ error: `Thiếu hoặc sai tham số key. Hợp lệ: ${Array.from(ALLOWED_KEYS).join(', ')}` });
   }
 
-  const pathname = `${PREFIX}/${key}.json`;
-
   try {
-    if (request.method === 'GET') {
-      let result;
-      try {
-        result = await get(pathname, { access: 'private' });
-      } catch (err) {
-        const msg = String(err && err.message || err);
-        // Chi coi la "chua co du lieu" khi loi ro rang la khong tim thay blob —
-        // moi loi khac (quyen truy cap, cau hinh sai...) phai bao ra ngoai
-        // de con biet duong sua, khong am tham lui ve mac dinh.
-        if (/not.?found/i.test(msg)) {
-          return response.status(200).json({ data: null, exists: false });
-        }
-        console.error('GET blob error:', msg);
-        return response.status(500).json({ error: `Lỗi đọc dữ liệu: ${msg}` });
-      }
+    const client = await getClient();
+    const collection = client.db(DB_NAME).collection(COLLECTION_NAME);
 
-      if (!result || !result.stream) {
+    if (request.method === 'GET') {
+      const doc = await collection.findOne({ _id: key });
+      if (!doc) {
         return response.status(200).json({ data: null, exists: false });
       }
-
-      const text = await new Response(result.stream).text();
-      const data = JSON.parse(text);
-      return response.status(200).json({ data, exists: true });
+      return response.status(200).json({ data: doc.value, exists: true });
     }
 
     if (request.method === 'POST') {
@@ -63,17 +60,17 @@ export default async function handler(request, response) {
       if (body === undefined || body === null) {
         return response.status(400).json({ error: 'Thiếu nội dung gửi lên (request body).' });
       }
-      await put(pathname, JSON.stringify(body), {
-        access: 'private',
-        addRandomSuffix: false,
-        contentType: 'application/json',
-        allowOverwrite: true
-      });
+      await collection.updateOne(
+        { _id: key },
+        { $set: { value: body, updatedAt: new Date() } },
+        { upsert: true }
+      );
       return response.status(200).json({ ok: true });
     }
 
     return response.status(405).json({ error: 'Method không được hỗ trợ.' });
   } catch (err) {
+    console.error('Mongo error:', err.message);
     return response.status(500).json({ error: err.message || 'Lỗi server không xác định.' });
   }
 }
