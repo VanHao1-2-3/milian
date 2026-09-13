@@ -1,75 +1,85 @@
 // useExcludedCodes.js
-// Quan ly danh sach chuoi loai tru hoan toan khoi tinh toan — vi du cac
-// cong thuc biet truoc khong can tinh san luong. Khop kieu "chua chuoi"
-// (xem rules.js) chu khong phai khop dung 6 ky tu dau.
+// Danh sach chuoi loai tru hoan toan khoi tinh toan — gio la DU LIEU DUNG
+// CHUNG (luu qua API /api/data, dung Vercel Blob phia server), khong con
+// rieng tung may nhu localStorage nua. Ai sua o may nao, may khac tai lai
+// trang se thay ngay.
 //
-// - Mac dinh: dung file data/excluded-codes.json nhung san luc build —
-//   ban co the tu ghi them truc tiep vao file nay khi can, giong cach
-//   cap nhat nc-code-map.json / ratio-map.json.
-// - Nguoi dung cung co the them/xoa ngay tren giao dien; danh sach sau khi
-//   sua se duoc luu vao localStorage va tro thanh danh sach hien hanh cho
-//   cac lan mo sau (cho den khi bam "Dung lai danh sach mac dinh").
-import { useState, useCallback } from 'react';
+// - Mac dinh: neu Blob chua co du lieu (lan dau tien, chua ai ghi gi), dung
+//   file data/excluded-codes.json nhung san luc build lam ban khoi diem.
+// - Khi nguoi dung them/xoa: ghi thang len Blob (dung chung), dong thoi cap
+//   nhat lai UI ngay (khong doi server tra loi xong moi hien).
+import { useState, useEffect, useCallback } from 'react';
+import { fetchShared, saveShared } from './sharedStore.js';
 import defaultExcludedCodes from '../data/excluded-codes.json';
 
-const LS_KEY = 'ncTool_excludedCodes_v2';
-
-function loadInitial() {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return { codes: parsed, source: 'edited' };
-    }
-  } catch (err) {
-    // bo qua neu cache loi/hong
-  }
-  return { codes: [...defaultExcludedCodes], source: 'default' };
-}
-
-function persist(list) {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(list));
-  } catch (err) {
-    // localStorage co the bi chan tren mot so trinh duyet — van dung duoc trong phien nay
-  }
-}
+const SHARED_KEY = 'excludedCodes';
 
 export function useExcludedCodes() {
-  const [state, setState] = useState(loadInitial);
+  const [codes, setCodes] = useState([...defaultExcludedCodes]);
+  const [source, setSource] = useState('default'); // 'default' | 'shared'
+  const [loading, setLoading] = useState(true);
+  const [syncError, setSyncError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchShared(SHARED_KEY)
+      .then(({ data, exists }) => {
+        if (cancelled) return;
+        if (exists && Array.isArray(data)) {
+          setCodes(data);
+          setSource('shared');
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setSyncError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function persist(next) {
+    setCodes(next);
+    setSource('shared');
+    try {
+      await saveShared(SHARED_KEY, next);
+      setSyncError('');
+    } catch (err) {
+      setSyncError(err.message);
+    }
+  }
 
   const addCode = useCallback((raw) => {
     const code = String(raw || '').trim().toUpperCase();
     if (!code) return;
-    setState((prev) => {
-      if (prev.codes.includes(code)) return prev;
-      const next = [...prev.codes, code].sort();
+    setCodes((prev) => {
+      if (prev.includes(code)) return prev;
+      const next = [...prev, code].sort();
       persist(next);
-      return { codes: next, source: 'edited' };
+      return next;
     });
   }, []);
 
   const removeCode = useCallback((code) => {
-    setState((prev) => {
-      const next = prev.codes.filter((c) => c !== code);
+    setCodes((prev) => {
+      const next = prev.filter((c) => c !== code);
       persist(next);
-      return { codes: next, source: 'edited' };
+      return next;
     });
   }, []);
 
   const resetToDefault = useCallback(() => {
-    try {
-      localStorage.removeItem(LS_KEY);
-    } catch (err) {
-      // bo qua
-    }
-    setState({ codes: [...defaultExcludedCodes], source: 'default' });
+    const next = [...defaultExcludedCodes];
+    persist(next);
   }, []);
 
   return {
-    codes: state.codes,
-    source: state.source,
-    codesSet: new Set(state.codes),
+    codes,
+    source,
+    loading,
+    syncError,
+    codesSet: new Set(codes),
     addCode,
     removeCode,
     resetToDefault

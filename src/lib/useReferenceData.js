@@ -1,70 +1,80 @@
 // useReferenceData.js
-// Quan ly du lieu bang tra cuu (NC编码 + 掺用比例).
+// Du lieu bang tra cuu (NC编码 + 掺用比例) — gio la DU LIEU DUNG CHUNG (luu
+// qua API /api/data, dung Vercel Blob phia server).
 //
-// - Mac dinh: dung 2 file JSON da nhung san (data/nc-code-map.json, data/ratio-map.json)
-//   — sinh ra tu file 产量NC.xlsx that luc build.
-// - Neu nguoi dung nap file moi, du lieu moi GHI DE ban mac dinh cho phien lam viec
-//   nay, VA duoc luu vao localStorage de lan mo app sau tu dong dung lai.
-import { useState, useCallback } from 'react';
+// - Mac dinh: neu Blob chua co du lieu, dung 2 file JSON nhung san
+//   (data/nc-code-map.json, data/ratio-map.json) lam ban khoi diem.
+// - Khi nguoi dung nap file 产量NC.xlsx moi: doc/parse ngay trong trinh
+//   duyet nhu cu, roi GHI LEN Blob (dung chung) thay vi chi luu localStorage.
+import { useState, useEffect, useCallback } from 'react';
 import { readWorkbookFile } from './utils.js';
 import { parseReferenceWorkbook } from './rules.js';
+import { fetchShared, saveShared } from './sharedStore.js';
 import defaultCodeMap from '../data/nc-code-map.json';
 import defaultRatioMap from '../data/ratio-map.json';
 
-const LS_CODE = 'ncTool_codeMap_override_v1';
-const LS_RATIO = 'ncTool_ratioMap_override_v1';
-const LS_META = 'ncTool_refMeta_override_v1';
-
-function loadInitialState() {
-  try {
-    const codeRaw = localStorage.getItem(LS_CODE);
-    const ratioRaw = localStorage.getItem(LS_RATIO);
-    const metaRaw = localStorage.getItem(LS_META);
-    if (codeRaw && ratioRaw && metaRaw) {
-      const meta = JSON.parse(metaRaw);
-      return {
-        codeMap: JSON.parse(codeRaw),
-        ratioMap: JSON.parse(ratioRaw),
-        source: 'uploaded',
-        fileName: meta.fileName
-      };
-    }
-  } catch (err) {
-    // bo qua neu cache loi/hong — dung ban mac dinh
-  }
-  return { codeMap: defaultCodeMap, ratioMap: defaultRatioMap, source: 'default', fileName: null };
-}
+const SHARED_KEY = 'referenceData';
 
 export function useReferenceData() {
-  const [state, setState] = useState(loadInitialState);
+  const [codeMap, setCodeMap] = useState(defaultCodeMap);
+  const [ratioMap, setRatioMap] = useState(defaultRatioMap);
+  const [source, setSource] = useState('default'); // 'default' | 'uploaded'
+  const [fileName, setFileName] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [syncError, setSyncError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchShared(SHARED_KEY)
+      .then(({ data, exists }) => {
+        if (cancelled) return;
+        if (exists && data && data.codeMap && data.ratioMap) {
+          setCodeMap(data.codeMap);
+          setRatioMap(data.ratioMap);
+          setSource('uploaded');
+          setFileName(data.fileName || null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setSyncError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const loadFromFile = useCallback(async (file) => {
     const workbook = await readWorkbookFile(file);
-    const { codeMap, ratioMap } = parseReferenceWorkbook(workbook);
+    const parsed = parseReferenceWorkbook(workbook);
 
-    setState({ codeMap, ratioMap, source: 'uploaded', fileName: file.name });
+    setCodeMap(parsed.codeMap);
+    setRatioMap(parsed.ratioMap);
+    setSource('uploaded');
+    setFileName(file.name);
 
     try {
-      localStorage.setItem(LS_CODE, JSON.stringify(codeMap));
-      localStorage.setItem(LS_RATIO, JSON.stringify(ratioMap));
-      localStorage.setItem(LS_META, JSON.stringify({ fileName: file.name, loadedAt: new Date().toISOString() }));
+      await saveShared(SHARED_KEY, { codeMap: parsed.codeMap, ratioMap: parsed.ratioMap, fileName: file.name });
+      setSyncError('');
     } catch (err) {
-      // localStorage co the bi chan tren mot so trinh duyet — van dung duoc trong phien nay
+      setSyncError(err.message);
     }
 
-    return { codeCount: Object.keys(codeMap).length, ratioCount: Object.keys(ratioMap).length };
+    return { codeCount: Object.keys(parsed.codeMap).length, ratioCount: Object.keys(parsed.ratioMap).length };
   }, []);
 
-  const resetToDefault = useCallback(() => {
-    setState({ codeMap: defaultCodeMap, ratioMap: defaultRatioMap, source: 'default', fileName: null });
+  const resetToDefault = useCallback(async () => {
+    setCodeMap(defaultCodeMap);
+    setRatioMap(defaultRatioMap);
+    setSource('default');
+    setFileName(null);
     try {
-      localStorage.removeItem(LS_CODE);
-      localStorage.removeItem(LS_RATIO);
-      localStorage.removeItem(LS_META);
+      await saveShared(SHARED_KEY, { codeMap: defaultCodeMap, ratioMap: defaultRatioMap, fileName: null });
+      setSyncError('');
     } catch (err) {
-      // bo qua
+      setSyncError(err.message);
     }
   }, []);
 
-  return { ...state, loadFromFile, resetToDefault };
+  return { codeMap, ratioMap, source, fileName, loading, syncError, loadFromFile, resetToDefault };
 }

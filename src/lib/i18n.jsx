@@ -9,7 +9,7 @@ const LS_KEY = 'ncTool_lang_v1';
 
 const dict = {
   vi: {
-    appName: 'Công việc văn phòng',
+    appName: 'Công cụ sản xuất',
     navHome: 'Trang chủ',
     navNcCalc: 'Tính toán dữ liệu NC',
     navNcCalcHint: 'Gộp theo công thức, trừ tỷ lệ pha trộn',
@@ -87,7 +87,7 @@ const dict = {
   },
 
   zh: {
-    appName: '办公室工作辅助',
+    appName: '生产工具',
     navHome: '首页',
     navNcCalc: 'NC数据计算',
     navNcCalcHint: '按配方汇总，扣除掺用比例',

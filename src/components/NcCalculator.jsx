@@ -83,8 +83,8 @@ export default function NcCalculator() {
 
       setRecords(parsed);
       setFileLabel(t.fileValidRows(file.name, parsed.length));
-      
-       let min = parsed[0].endDate, max = parsed[0].endDate;
+
+      let min = parsed[0].endDate, max = parsed[0].endDate;
       parsed.forEach((r) => {
         if (r.endDate < min) min = r.endDate;
         if (r.endDate > max) max = r.endDate;
@@ -120,7 +120,7 @@ export default function NcCalculator() {
         setMissingList(result.missingList);
         const gNet = result.summary.reduce((s, r) => s + r.net, 0);
         const gCount = result.summary.reduce((s, r) => s + r.count, 0);
-        let msg = t.msgCalcDone(result.summary.length, gCount, gNet.toFixed(2));
+        let msg = t.msgCalcDone(result.summary.length, gCount, gNet.toFixed(3));
         if (result.missingList.length) msg += t.msgMissingAppend(result.missingList.length);
         setMsg(msg, result.missingList.length > 0);
       }
@@ -138,15 +138,15 @@ export default function NcCalculator() {
     ];
     summary.forEach((r) => wsData.push([
       r.ncCode, r.baseCode,
-      Number(r.production.toFixed(2)), Number(r.blended.toFixed(2)), Number(r.net.toFixed(2))
+      Number(r.production.toFixed(3)), Number(r.blended.toFixed(3)), Number(r.net.toFixed(3))
     ]));
-    wsData.push(['', t.totalRow, Number(grandProduction.toFixed(2)), Number(grandBlended.toFixed(2)), Number(grandNet.toFixed(2))]);
+    wsData.push(['', t.totalRow, Number(grandProduction.toFixed(3)), Number(grandBlended.toFixed(3)), Number(grandNet.toFixed(3))]);
 
     if (missingList.length) {
       wsData.push([]);
       wsData.push([t.xlsxMissingTitle]);
       wsData.push([t.colFullCode, t.colBatchCount, t.colUncountedWeight]);
-      missingList.forEach((r) => wsData.push([r.code, r.count, Number(r.total.toFixed(2))]));
+      missingList.forEach((r) => wsData.push([r.code, r.count, Number(r.total.toFixed(3))]));
     }
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
@@ -159,9 +159,9 @@ export default function NcCalculator() {
   function onCopy() {
     let text = `NC编码\t胶种\t产量\t掺用量\t净产出\n`;
     summary.forEach((r) => {
-      text += `${r.ncCode}\t${r.baseCode}\t${r.production.toFixed(2)}\t${r.blended.toFixed(2)}\t${r.net.toFixed(2)}\n`;
+      text += `${r.ncCode}\t${r.baseCode}\t${r.production.toFixed(3)}\t${r.blended.toFixed(3)}\t${r.net.toFixed(3)}\n`;
     });
-    text += `\t${t.totalRow}\t${grandProduction.toFixed(2)}\t${grandBlended.toFixed(2)}\t${grandNet.toFixed(2)}\n`;
+    text += `\t${t.totalRow}\t${grandProduction.toFixed(3)}\t${grandBlended.toFixed(3)}\t${grandNet.toFixed(3)}\n`;
 
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(text).then(
@@ -226,6 +226,9 @@ export default function NcCalculator() {
           <code className="font-mono bg-canvas px-1.5 py-0.5 rounded">产量NC.xlsx</code>{' '}
           {t.refHelpPost}
         </p>
+        {ref.syncError && (
+          <p className="text-[12.5px] text-red-600 mt-2">⚠ Không đồng bộ được với máy chủ: {ref.syncError}</p>
+        )}
       </section>
 
       {/* Ma loai tru khoi tinh toan */}
@@ -235,8 +238,8 @@ export default function NcCalculator() {
             {t.excludeLabel} <span className="text-ink-faint font-normal">{t.excludeSub}</span>
           </label>
           <div className="flex items-center gap-2">
-            <Tag isUploaded={excluded.source === 'edited'} labelDefault={t.tagDefault} labelUploaded={t.tagEdited} />
-            {excluded.source === 'edited' && (
+            <Tag isUploaded={excluded.source === 'shared'} labelDefault={t.tagDefault} labelUploaded={t.tagEdited} />
+            {excluded.source === 'shared' && (
               <button
                 onClick={excluded.resetToDefault}
                 className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-soft border border-line rounded-md px-2.5 py-1.5 hover:border-accent hover:text-accent-dark transition-colors"
@@ -289,6 +292,9 @@ export default function NcCalculator() {
           <code className="font-mono bg-canvas px-1.5 py-0.5 rounded">AQPS33</code>{t.excludeHelpMid}
           <strong> {t.excludeHelpContains}</strong> {t.excludeHelpPost}
         </p>
+        {excluded.syncError && (
+          <p className="text-[12.5px] text-red-600 mt-2">⚠ Không đồng bộ được với máy chủ: {excluded.syncError}</p>
+        )}
       </section>
 
       {/* File san xuat + khoang thoi gian */}
@@ -361,9 +367,9 @@ export default function NcCalculator() {
                 <tr key={row.baseCode} className="hover:bg-canvas/60">
                   <td className="py-2.5 px-2.5 border-b border-line font-mono text-ink-soft">{row.ncCode || '—'}</td>
                   <td className="py-2.5 px-2.5 border-b border-line">{row.baseCode}</td>
-                  <td className="py-2.5 px-2.5 border-b border-line text-right font-mono">{row.production.toFixed(2)}</td>
-                  <td className="py-2.5 px-2.5 border-b border-line text-right font-mono">{row.blended.toFixed(2)}</td>
-                  <td className="py-2.5 px-2.5 border-b border-line text-right font-mono font-semibold">{row.net.toFixed(2)}</td>
+                  <td className="py-2.5 px-2.5 border-b border-line text-right font-mono">{row.production.toFixed(3)}</td>
+                  <td className="py-2.5 px-2.5 border-b border-line text-right font-mono">{row.blended.toFixed(3)}</td>
+                  <td className="py-2.5 px-2.5 border-b border-line text-right font-mono font-semibold">{row.net.toFixed(3)}</td>
                 </tr>
               ))}
             </tbody>
@@ -371,9 +377,9 @@ export default function NcCalculator() {
               <tfoot>
                 <tr className="font-bold font-mono bg-amber-100/70">
                   <td colSpan={2} className="py-3 px-2.5 border-t-2 border-ink font-sans">{t.totalRow}</td>
-                  <td className="py-3 px-2.5 border-t-2 border-ink text-right">{grandProduction.toFixed(2)}</td>
-                  <td className="py-3 px-2.5 border-t-2 border-ink text-right">{grandBlended.toFixed(2)}</td>
-                  <td className="py-3 px-2.5 border-t-2 border-ink text-right">{grandNet.toFixed(2)}</td>
+                  <td className="py-3 px-2.5 border-t-2 border-ink text-right">{grandProduction.toFixed(3)}</td>
+                  <td className="py-3 px-2.5 border-t-2 border-ink text-right">{grandBlended.toFixed(3)}</td>
+                  <td className="py-3 px-2.5 border-t-2 border-ink text-right">{grandNet.toFixed(3)}</td>
                 </tr>
               </tfoot>
             )}
@@ -406,7 +412,7 @@ export default function NcCalculator() {
                   <tr key={row.code}>
                     <td className="py-2 px-2.5 border-b border-amber-100 font-mono">{row.code}</td>
                     <td className="py-2 px-2.5 border-b border-amber-100 text-right font-mono">{row.count}</td>
-                    <td className="py-2 px-2.5 border-b border-amber-100 text-right font-mono">{row.total.toFixed(2)}</td>
+                    <td className="py-2 px-2.5 border-b border-amber-100 text-right font-mono">{row.total.toFixed(3)}</td>
                   </tr>
                 ))}
               </tbody>
