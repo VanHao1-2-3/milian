@@ -83,11 +83,11 @@ export default function NcCalculator() {
 
       setRecords(parsed);
       setFileLabel(t.fileValidRows(file.name, parsed.length));
-
-      let min = parsed[0].startDate, max = parsed[0].startDate;
+      
+       let min = parsed[0].endDate, max = parsed[0].endDate;
       parsed.forEach((r) => {
-        if (r.startDate < min) min = r.startDate;
-        if (r.startDate > max) max = r.startDate;
+        if (r.endDate < min) min = r.endDate;
+        if (r.endDate > max) max = r.endDate;
       });
       setStartDateTime(min);
       setEndDateTime(max);

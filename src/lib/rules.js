@@ -10,9 +10,14 @@
  *
  * ĐIỀU KIỆN ĐANG ÁP DỤNG:
  *
- * 1. Lọc theo khoảng ngày-giờ: lấy các dòng có "Batch Start Date" nằm
- *    trong khoảng [ngày giờ bắt đầu, ngày giờ kết thúc] do người dùng chọn
- *    (2 ô input riêng, chọn được cả ngày lẫn giờ).
+ * 1. Lọc theo khoảng ngày-giờ: lấy các dòng có "Batch End Date" (thời điểm
+ *    KẾT THÚC mẻ, không phải thời điểm bắt đầu) nằm trong khoảng [ngày giờ
+ *    bắt đầu, ngày giờ kết thúc] do người dùng chọn. Dùng End thay vì Start
+ *    vì có những mẻ kéo dài bất thường (VD bắt đầu 14:30 nhưng 22:13 mới
+ *    xong) — nếu lọc theo Start sẽ tính nhầm mẻ đó vào khung giờ nó BẮT ĐẦU
+ *    trong khi thực tế sản lượng chỉ có khi mẻ đã HOÀN THÀNH. Nếu một dòng
+ *    không đọc được Batch End Date, tạm dùng Batch Start Date của dòng đó
+ *    thay thế để không mất dữ liệu.
  *
  * 2. Chọn cột mã công thức: file sản xuất có 2 cột tên "Recipe" (1 cột là
  *    mã chữ+số, 1 cột là số phiên bản luôn = 1) — tự động chọn cột có
@@ -82,11 +87,13 @@ export function parseProductionRows(rows) {
 
   const headerRow = rows[0].map(normalizeHeader);
   const startCol = findColumn(headerRow, 'batchstart', 'starts');
+  const endCol = findColumn(headerRow, 'batchend', 'starts');
   const weightCol = findColumn(headerRow, 'weight', 'contains');
   const recipeCol = pickRecipeColumn(headerRow, rows);
 
   if (recipeCol < 0) throw new Error("Không tìm thấy cột mã công thức (Recipe) trong file.");
   if (startCol < 0) throw new Error("Không tìm thấy cột 'Batch Start Date' trong file.");
+  if (endCol < 0) throw new Error("Không tìm thấy cột 'Batch End Date' trong file.");
   if (weightCol < 0) throw new Error('Không tìm thấy cột khối lượng (weight) trong file.');
 
   const records = [];
@@ -99,11 +106,16 @@ export function parseProductionRows(rows) {
     const startDate = parseDateCell(row[startCol]);
     if (!startDate) continue;
 
+    // Uu tien Batch End Date de loc theo khoang thoi gian (xem dieu kien 1
+    // o dau file). Neu dong nay khong doc duoc End Date thi tam dung Start
+    // Date thay the, tranh mat du lieu.
+    const endDate = parseDateCell(row[endCol]) || startDate;
+
     let weight = row[weightCol];
     weight = typeof weight === 'number' ? weight : parseFloat(String(weight).replace(',', '.'));
     if (isNaN(weight)) weight = 0;
 
-    records.push({ code: String(code).trim().toUpperCase(), startDate, weight });
+    records.push({ code: String(code).trim().toUpperCase(), startDate, endDate, weight });
   }
 
   if (!records.length) throw new Error('Không đọc được dòng dữ liệu hợp lệ nào trong file.');
@@ -144,9 +156,9 @@ export function parseReferenceWorkbook(workbook) {
   return { codeMap, ratioMap };
 }
 
-/** Dieu kien 1: loc theo khoang ngay-gio [start, end], ca 2 dau bao gom (inclusive). */
+/** Dieu kien 1: loc theo khoang ngay-gio [start, end], dua tren Batch End Date. */
 export function filterByDateRange(records, startDateTime, endDateTime) {
-  return records.filter((r) => r.startDate >= startDateTime && r.startDate <= endDateTime);
+  return records.filter((r) => r.endDate >= startDateTime && r.endDate <= endDateTime);
 }
 
 /**
