@@ -47,7 +47,7 @@ export default async function handler(request, response) {
         return response.status(400).json({ error: 'Thiếu nội dung gửi lên (request body).' });
       }
       const blob = await put(pathname, JSON.stringify(body), {
-        access: 'public',
+        access: 'private',
         addRandomSuffix: false,
         contentType: 'application/json',
         allowOverwrite: true
