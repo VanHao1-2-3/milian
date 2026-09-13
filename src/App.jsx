@@ -62,7 +62,7 @@ export default function App() {
 
           <div className="flex items-center gap-2 text-[11.5px] text-slate-400">
             <CircleDot size={10} className="text-emerald-400 shrink-0" />
-            {t.footerOffline}
+            {/* {t.footerOffline} */}
           </div>
         </div>
       </aside>
