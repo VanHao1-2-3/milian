@@ -17,8 +17,8 @@ export default function App() {
     <div className="flex min-h-screen">
       <aside className="w-64 shrink-0 bg-sidebar text-slate-200 flex flex-col p-5">
         <div className="flex items-center gap-3 pb-5 mb-4 border-b border-white/10">
-          <div className="w-9 h-9 rounded-lg bg-accent text-[#241605] font-mono font-bold text-sm flex items-center justify-center">
-            NC
+          <div className="w-9 h-9 rounded-lg font-mono font-bold text-sm flex items-center justify-center">
+            <img src="/public/logo.png" alt="" />
           </div>
           <span className="font-semibold text-[15px] text-slate-50">{t.appName}</span>
         </div>
