@@ -41,10 +41,10 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="mt-auto flex items-center gap-2 text-[11.5px] text-slate-400">
+        {/* <div className="mt-auto flex items-center gap-2 text-[11.5px] text-slate-400">
           <CircleDot size={10} className="text-emerald-400 shrink-0" />
           {t.footerOffline}
-        </div>
+        </div> */}
       </aside>
 
       <main className="flex-1 px-10 py-9 max-w-5xl">
