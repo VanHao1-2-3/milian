@@ -13,7 +13,7 @@ const dict = {
     navHome: 'Trang chủ',
     navNcCalc: 'Tính toán dữ liệu NC',
     navNcCalcHint: 'Gộp theo công thức, trừ tỷ lệ pha trộn',
-    // footerOffline: 'Chạy trên trình duyệt — dữ liệu không rời khỏi máy bạn',
+    footerOffline: 'Chạy trên trình duyệt — dữ liệu không rời khỏi máy bạn',
 
     homeTitle: 'Trang chủ',
     homeSubtitle: 'Chọn một tính năng bên dưới hoặc ở thanh bên trái để bắt đầu.',
@@ -91,7 +91,7 @@ const dict = {
     navHome: '首页',
     navNcCalc: 'NC数据计算',
     navNcCalcHint: '按配方汇总，扣除掺用比例',
-    // footerOffline: '在浏览器中运行 — 数据不会离开您的电脑',
+    footerOffline: '在浏览器中运行 — 数据不会离开您的电脑',
 
     homeTitle: '首页',
     homeSubtitle: '选择下方或左侧的功能开始使用。',
