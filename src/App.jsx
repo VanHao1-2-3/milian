@@ -62,7 +62,7 @@ export default function App() {
         >
           <div className="w-9 h-9 shrink-0 rounded-lg font-mono font-bold text-sm flex items-center justify-center">
             <img
-              src="/public/logo.png"
+              src="logo.png"
               alt=""
               className="w-full h-full object-contain"
             />
