@@ -1,0 +1,114 @@
+{
+  "categories": [
+    {
+      "id": "quality",
+      "name": "质量",
+      "nameVi": "Chất lượng",
+      "icon": "🧪",
+      "words": [
+        {
+          "hanzi": "质量",
+          "pinyin": "zhì liàng",
+          "vietnamese": "Chất lượng",
+          "hanviet": "chất lượng"
+        },
+        {
+          "hanzi": "异常",
+          "pinyin": "yì cháng",
+          "vietnamese": "Bất thường",
+          "hanviet": "dị thường"
+        },
+        {
+          "hanzi": "温度",
+          "pinyin": "wēn dù",
+          "vietnamese": "Nhiệt độ",
+          "hanviet": "ôn độ"
+        }
+      ]
+    },
+    {
+      "id": "machine",
+      "name": "设备",
+      "nameVi": "Máy móc / thiết bị",
+      "icon": "⚙️",
+      "words": [
+        {
+          "hanzi": "密炼机",
+          "pinyin": "mì liàn jī",
+          "vietnamese": "Máy luyện kín",
+          "hanviet": "mật luyện cơ"
+        },
+        {
+          "hanzi": "开炼机",
+          "pinyin": "kāi liàn jī",
+          "vietnamese": "Máy luyện hở",
+          "hanviet": "khai luyện cơ"
+        },
+        {
+          "hanzi": "挤出机",
+          "pinyin": "jǐ chū jī",
+          "vietnamese": "Máy đùn",
+          "hanviet": "tễ xuất cơ"
+        }
+      ]
+    },
+    {
+      "id": "现场",
+      "name": "现场",
+      "nameVi": "Hiện trường",
+      "icon": "🏭",
+      "words": [
+        {
+          "hanzi": "现场",
+          "pinyin": "xiàn chǎng",
+          "vietnamese": "Hiện trường",
+          "hanviet": "hiện trường"
+        },
+        {
+          "hanzi": "操作员",
+          "pinyin": "cāo zuò yuán",
+          "vietnamese": "Nhân viên thao tác",
+          "hanviet": "thao tác viên"
+        },
+        {
+          "hanzi": "确认",
+          "pinyin": "què rèn",
+          "vietnamese": "Xác nhận",
+          "hanviet": "xác nhận"
+        }
+      ]
+    },
+    {
+      "id": "rubber",
+      "name": "橡胶",
+      "nameVi": "Cao su / luyện su",
+      "icon": "🛞",
+      "words": [
+        {
+          "hanzi": "炼胶",
+          "pinyin": "liàn jiāo",
+          "vietnamese": "Luyện su",
+          "hanviet": "luyện giao"
+        },
+        {
+          "hanzi": "混炼",
+          "pinyin": "hùn liàn",
+          "vietnamese": "Luyện / phối luyện",
+          "hanviet": "hỗn luyện"
+        },
+        {
+          "hanzi": "胶料",
+          "pinyin": "jiāo liào",
+          "vietnamese": "Liệu cao su",
+          "hanviet": "giao liệu"
+        },
+        {
+          "hanzi": "包辊",
+          "pinyin": "bāo gǔn",
+          "vietnamese": "Bám / quấn trục",
+          "hanviet": "bao cổn"
+        }
+      ]
+    }
+  ]
+}

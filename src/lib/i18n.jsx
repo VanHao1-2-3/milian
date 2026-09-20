@@ -13,6 +13,10 @@ const dict = {
     navHome: 'Trang chủ',
     navNcCalc: 'Tính toán dữ liệu NC',
     navNcCalcHint: 'Gộp theo công thức, trừ tỷ lệ pha trộn',
+    navRubberChinese: 'Tiếng Trung luyện su',
+    navRubberChineseHint: 'Từ vựng chuyên ngành luyện su',
+    navRubberInventory: 'Tồn kho su',
+    navRubberInventoryHint: 'Theo dõi lô và kiểm tra FIFO',
     footerOffline: 'Chạy trên trình duyệt — dữ liệu không rời khỏi máy bạn',
 
     homeTitle: 'Trang chủ',
@@ -91,7 +95,11 @@ const dict = {
     navHome: '首页',
     navNcCalc: 'NC数据计算',
     navNcCalcHint: '按配方汇总，扣除掺用比例',
-    footerOffline: '在浏览器中运行 — 数据不会离开您的电脑',
+    navRubberChinese: '密炼车间中文',
+    navRubberInventory: '胶料库存',
+    navRubberInventoryHint: '批次库存与FIFO检查',
+    navRubberChineseHint: '密炼车间专业词汇',
+    // footerOffline: '在浏览器中运行 — 数据不会离开您的电脑',
 
     homeTitle: '首页',
     homeSubtitle: '选择下方或左侧的功能开始使用。',
