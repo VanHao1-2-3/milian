@@ -95,6 +95,8 @@ const dict = {
     navHome: '首页',
     navNcCalc: 'NC数据计算',
     navNcCalcHint: '按配方汇总，扣除掺用比例',
+    navNcSum: 'NC月底数据计算',
+    navNcSumHint: '按配方汇总，扣除掺用比例',
     navRubberChinese: '密炼车间中文',
     navRubberInventory: '胶料库存',
     navRubberInventoryHint: '批次库存与FIFO检查',

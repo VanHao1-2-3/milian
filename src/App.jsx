@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import HomePanel from './components/HomePanel.jsx';
 import NcCalculator from './components/NcCalculator.jsx';
+import NcSumary from './components/NcSummaryTable.jsx';
 import RubberChinese from './components/RubberChinese.jsx';
 import RubberInventory from './components/RubberInventory.jsx';
 import { useLanguage } from './lib/i18n.jsx';
@@ -23,6 +24,7 @@ export default function App() {
   const NAV_ITEMS = [
     { key: 'home', label: t.navHome, icon: LayoutGrid },
     { key: 'nc-calc', label: t.navNcCalc, hint: t.navNcCalcHint, icon: FlaskConical },
+    { key: 'nc-sum', label: t.navNcSum, hint: t.navNcSumHint, icon: FlaskConical },
     { key: 'rubber-chinese', label: t.navRubberChinese, hint: t.navRubberChineseHint, icon: BookOpen },
     { key: 'rubber-inventory', label: t.navRubberInventory, hint: t.navRubberInventoryHint, icon: Package }
   ];
@@ -175,6 +177,7 @@ export default function App() {
 
         {view === 'home' && <HomePanel onNavigate={setView} />}
         {view === 'nc-calc' && <NcCalculator />}
+        {view === 'nc-sum' && <NcSumary />}
         {view === 'rubber-chinese' && <RubberChinese />}
         {view === 'rubber-inventory' && <RubberInventory />}
       </main>

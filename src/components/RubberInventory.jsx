@@ -15,14 +15,25 @@ import {
   X,
   CheckSquare,
   Square,
-  Lock
+  Lock,
+  FileSpreadsheet,
+  AlertOctagon
 } from 'lucide-react';
 import { readWorkbookFile } from '../lib/utils.js';
 
 const ITEMS_PER_PAGE = 15;
 const NORMAL_STATUS = '正常';
 const AGV_LOCKED_STATUS = 'AGV库区锁定';
-const RETURN_COMPONENT_TYPE = '返回部件';
+
+// Các nghiệp vụ nhập kho / trả kho cuối cùng cần kiểm tra tồn kho
+const TARGET_INBOUND_BUSINESS_TYPES = [
+  '返余料',
+  '密炼自动满料入库',
+  '密炼手动满料入库'
+];
+
+// Danh sách các trạng thái KHÔNG TÍNH VÀO FIFO
+const EXCLUDED_FIFO_STATUSES = ['不合格', '冻结'];
 
 function normalize(value) {
   return String(value ?? '').trim();
@@ -54,7 +65,6 @@ function formatDateTime(value) {
   return new Intl.DateTimeFormat('vi-VN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
-// Tính trạng thái quá hạn / còn hạn
 function getExpirationStatus(expireTime) {
   const expire = parseDate(expireTime);
   if (!expire) return { text: '-', isExpired: false };
@@ -74,14 +84,12 @@ function getExpirationStatus(expireTime) {
   };
 }
 
-// Trích xuất 15 ký tự đầu làm mã lô chính
 function extractBatchPrefix(batchBarcode) {
   if (!batchBarcode) return '';
   const clean = String(batchBarcode).trim();
   return clean.substring(0, 15);
 }
 
-// Trích xuất Số xe/mẻ
 function extractCarNo(batchBarcode) {
   if (!batchBarcode) return '-';
   const clean = String(batchBarcode).trim();
@@ -96,9 +104,15 @@ function extractCarNo(batchBarcode) {
   return '-';
 }
 
+function isNextProcessMachine(machineCode) {
+  if (!machineCode) return false;
+  const firstChar = String(machineCode).trim().charAt(0).toUpperCase();
+  return firstChar !== '' && firstChar !== 'A';
+}
+
 function parseInventoryRows(rows) {
   if (!Array.isArray(rows) || rows.length < 2) {
-    throw new Error('File Excel không có dữ liệu.');
+    throw new Error('File Excel tồn kho không có dữ liệu.');
   }
 
   const headers = rows[0].map(normalize);
@@ -143,29 +157,39 @@ function parseInventoryRows(rows) {
   const missing = required.filter(([, index]) => index === -1).map(([name]) => name);
 
   if (missing.length) {
-    throw new Error(`File thiếu cột bắt buộc: ${missing.join(', ')}`);
+    throw new Error(`File tồn kho thiếu cột bắt buộc: ${missing.join(', ')}`);
   }
 
   return rows.slice(1).map((row, index) => {
     const rawBatch = normalize(row[indexes.batch]);
+    const originalQty = parseNumber(row[indexes.originalQty]);
+    const remainingQty = parseNumber(row[indexes.remainingQty]);
+    const machine = normalize(row[indexes.machine]);
+    const rfid = normalize(row[indexes.rfid]);
+
+    const isDispatched = isNextProcessMachine(machine);
+    const isUsed = remainingQty < originalQty; // Pallet đã sử dụng dở
+
     return {
-      id: `${index}-${normalize(row[indexes.rfid])}`,
+      id: `${index}-${rfid}`,
       status: normalize(row[indexes.status]),
       materialType: normalize(row[indexes.materialType]),
       materialName: normalize(row[indexes.materialName]),
-      rfid: normalize(row[indexes.rfid]),
+      rfid,
       location: normalize(row[indexes.location]),
       batch: rawBatch,
       batchPrefix: extractBatchPrefix(rawBatch),
       carNo: extractCarNo(rawBatch),
-      originalQty: parseNumber(row[indexes.originalQty]),
-      remainingQty: parseNumber(row[indexes.remainingQty]),
+      originalQty,
+      remainingQty,
       productionDate: parseDate(row[indexes.productionDate]),
       expireTime: parseDate(row[indexes.expireTime]),
       mesCode: normalize(row[indexes.mesCode]),
       trolleyType: normalize(row[indexes.trolleyType]),
       warehouse: normalize(row[indexes.warehouse]),
-      machine: normalize(row[indexes.machine]),
+      machine,
+      isDispatched,
+      isUsed,
       station: normalize(row[indexes.station]),
       inboundTime: parseDate(row[indexes.inboundTime]),
       targetMachine: normalize(row[indexes.targetMachine]),
@@ -177,6 +201,40 @@ function parseInventoryRows(rows) {
       freezeReason: normalize(row[indexes.freezeReason])
     };
   }).filter(row => row.materialName);
+}
+
+function parseAgvLogRows(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return [];
+
+  const headers = rows[0].map(normalize);
+  const indexOf = name => headers.indexOf(name);
+
+  const indexes = {
+    businessType: indexOf('业务类型'),
+    palletId: indexOf('PalletID'),
+    location: indexOf('库位号'),
+    mesCode: indexOf('MES物料编码'),
+    materialName: indexOf('MES物料名称'),
+    barcode: indexOf('条码'),
+    status: indexOf('执行状态'),
+    updatedAt: indexOf('更新时间')
+  };
+
+  if (indexes.palletId === -1 || indexes.businessType === -1) {
+    return [];
+  }
+
+  return rows.slice(1).map((row, index) => ({
+    id: index,
+    businessType: normalize(row[indexes.businessType]),
+    palletId: normalize(row[indexes.palletId]),
+    location: normalize(row[indexes.location]),
+    mesCode: normalize(row[indexes.mesCode]),
+    materialName: normalize(row[indexes.materialName]),
+    barcode: normalize(row[indexes.barcode]),
+    status: normalize(row[indexes.status]),
+    updatedAt: parseDate(row[indexes.updatedAt])
+  })).filter(item => item.palletId);
 }
 
 function buildMaterialGroups(records) {
@@ -247,7 +305,6 @@ function buildMaterialGroups(records) {
       lot.records.push(record);
     });
 
-    // Chỉ lấy lô 正常 cho kiểm tra FIFO (bỏ qua AGV库区锁定)
     group.normalLots = Array.from(lotMap.values())
       .filter(lot => lot.status === NORMAL_STATUS)
       .sort((a, b) => {
@@ -264,40 +321,54 @@ function buildMaterialGroups(records) {
 
     group.normalLotCount = group.normalLots.length;
 
-    // ==========================================
-    // LOGIC CHECK FIFO (BỎ QUA KHÓA AGV)
-    // ==========================================
     let fifoRequired = false;
     let fifoWarningReason = '';
 
-    // 1. Kiểm tra su Trả về (返回部件) chỉ trên trạng thái NORMAL
-    if (group.materialType === RETURN_COMPONENT_TYPE || group.materialType.includes('返回')) {
-      const allNormalRecords = group.allRecords
-        .filter(r => r.status === NORMAL_STATUS)
-        .sort((a, b) => (a.productionDate || 0) - (b.productionDate || 0));
+    const validFifoRecords = group.allRecords
+      .filter(r => !EXCLUDED_FIFO_STATUSES.includes(r.status))
+      .sort((a, b) => (a.productionDate || 0) - (b.productionDate || 0));
 
-      const firstUncalledIndex = allNormalRecords.findIndex(r => !r.machine);
+    const materialTypeUpper = group.materialType.toUpperCase();
+    const materialNameUpper = group.materialName.toUpperCase();
 
-      if (firstUncalledIndex !== -1) {
-        const skippedPallet = allNormalRecords.slice(firstUncalledIndex + 1).find(r => Boolean(r.machine));
+    const isSuQ = materialNameUpper.startsWith('AQ') || materialTypeUpper.startsWith('AQ');
+    const isSuReturn = materialTypeUpper.includes('返回') || materialTypeUpper.includes('RETURN');
 
-        if (skippedPallet) {
-          const olderUncalled = allNormalRecords[firstUncalledIndex];
+    if (isSuQ) {
+      const firstUnusedIndex = validFifoRecords.findIndex(r => !r.isDispatched);
+      if (firstUnusedIndex !== -1) {
+        const skippedDispatchedPallet = validFifoRecords.slice(firstUnusedIndex + 1).find(r => r.isDispatched);
+
+        if (skippedDispatchedPallet) {
+          const olderUnused = validFifoRecords[firstUnusedIndex];
           fifoRequired = true;
-          fifoWarningReason = `Bất thường FIFO: Pallet mới (${formatDate(skippedPallet.productionDate)}) đã được máy ${skippedPallet.machine} gọi, nhưng pallet cũ (${formatDate(olderUncalled.productionDate)}) lại bị bỏ qua!`;
+          fifoWarningReason = `Lỗi FIFO Su Q: Pallet mới (${formatDateTime(skippedDispatchedPallet.productionDate)}) đã được máy ${skippedDispatchedPallet.machine} sử dụng, trong khi pallet cũ hơn (${formatDateTime(olderUnused.productionDate)}) chưa được sử dụng!`;
+        }
+      }
+    } else if (isSuReturn) {
+      const firstUncalledIndex = validFifoRecords.findIndex(r => !r.machine);
+      if (firstUncalledIndex !== -1) {
+        const skippedPallet = validFifoRecords.slice(firstUncalledIndex + 1).find(r => Boolean(r.machine));
+        if (skippedPallet) {
+          const olderUncalled = validFifoRecords[firstUncalledIndex];
+          fifoRequired = true;
+          fifoWarningReason = `Lỗi FIFO Su Trả Về: Pallet mới (${formatDate(skippedPallet.productionDate)}) đã được máy ${skippedPallet.machine} gọi, nhưng pallet cũ (${formatDate(olderUncalled.productionDate)}) chưa được gọi!`;
         }
       }
     } else {
-      // 2. Đối với su 1M, 2M, 3M NORMAL: Thời gian 2 lô cách nhau >= 8 tiếng mới báo
       if (group.normalLots.length >= 2) {
         for (let i = 0; i < group.normalLots.length - 1; i++) {
           const lot1 = group.normalLots[i];
           const lot2 = group.normalLots[i + 1];
-          if (lot1.productionDate && lot2.productionDate) {
+
+          const lot1HasUnusedPallet = lot1.records.some(r => !r.isUsed && !EXCLUDED_FIFO_STATUSES.includes(r.status));
+          const lot2HasStartedUsed = lot2.records.some(r => r.isUsed && !EXCLUDED_FIFO_STATUSES.includes(r.status));
+
+          if (lot1HasUnusedPallet && lot2HasStartedUsed && lot1.productionDate && lot2.productionDate) {
             const diffHours = Math.abs(lot2.productionDate - lot1.productionDate) / (1000 * 60 * 60);
             if (diffHours >= 8) {
               fifoRequired = true;
-              fifoWarningReason = `Các lô 正常 cách nhau >= 8 tiếng (${Math.round(diffHours)}h). Cần ưu tiên dùng lô cũ trước.`;
+              fifoWarningReason = `Lỗi FIFO Su A: Các lô cách nhau >= 8 tiếng (${Math.round(diffHours)}h). Lô cũ vẫn còn pallet chưa dùng nhưng lô mới đã bị lấy ra sử dụng!`;
               break;
             }
           }
@@ -330,7 +401,7 @@ function StatusBadge({ status }) {
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-red-50 text-red-600 whitespace-nowrap">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-50 text-amber-700 whitespace-nowrap">
       <XCircle size={12} /> {status || '-'}
     </span>
   );
@@ -338,17 +409,22 @@ function StatusBadge({ status }) {
 
 export default function RubberInventory() {
   const fileInputRef = useRef(null);
+  const logFileInputRef = useRef(null);
   const dropdownRef = useRef(null);
 
   const [records, setRecords] = useState([]);
+  const [agvLogs, setAgvLogs] = useState([]);
   const [fileName, setFileName] = useState('');
+  const [logFileName, setLogFileName] = useState('');
+
   const [selectedKey, setSelectedKey] = useState(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isAbnormalModalOpen, setIsAbnormalModalOpen] = useState(false);
 
   const [selectedTypes, setSelectedTypes] = useState([]);
   const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
   const [keyword, setKeyword] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'normal' | 'locked' | 'abnormal'
+  const [statusFilter, setStatusFilter] = useState('all');
   const [fifoFilter, setFifoFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -374,6 +450,36 @@ export default function RubberInventory() {
     setIsModalVisible(false);
     setTimeout(() => setSelectedKey(null), 200);
   }
+
+  const abnormalPallets = useMemo(() => {
+    if (!agvLogs.length) return [];
+
+    const latestTaskMap = new Map();
+
+    agvLogs.forEach(log => {
+      const existing = latestTaskMap.get(log.palletId);
+      if (!existing || (log.updatedAt && existing.updatedAt && log.updatedAt > existing.updatedAt)) {
+        latestTaskMap.set(log.palletId, log);
+      }
+    });
+
+    const inventoryRfidSet = new Set(records.map(r => r.rfid));
+    const result = [];
+
+    for (const [palletId, lastLog] of latestTaskMap.entries()) {
+      const isTargetBusiness = TARGET_INBOUND_BUSINESS_TYPES.some(type =>
+        lastLog.businessType.includes(type)
+      );
+
+      if (isTargetBusiness) {
+        if (!inventoryRfidSet.has(palletId)) {
+          result.push(lastLog);
+        }
+      }
+    }
+
+    return result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }, [agvLogs, records]);
 
   const groups = useMemo(() => buildMaterialGroups(records), [records]);
 
@@ -464,8 +570,6 @@ export default function RubberInventory() {
     setError('');
     setSelectedKey(null);
     setIsModalVisible(false);
-    setSelectedTypes([]);
-    setCurrentPage(1);
 
     try {
       const workbook = await readWorkbookFile(file);
@@ -485,9 +589,36 @@ export default function RubberInventory() {
       setError(err?.message || 'Không thể đọc file tồn kho.');
     } finally {
       setLoading(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleAgvLogFileChange(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const workbook = await readWorkbookFile(file);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+
+      const parsed = parseAgvLogRows(rows);
+      if (!parsed.length) {
+        throw new Error('Không đọc được nhật ký AGV hợp lệ.');
       }
+
+      setAgvLogs(parsed);
+      setLogFileName(file.name);
+    } catch (err) {
+      setAgvLogs([]);
+      setLogFileName('');
+      setError(err?.message || 'Không thể đọc file nhật ký AGV.');
+    } finally {
+      setLoading(false);
+      if (logFileInputRef.current) logFileInputRef.current.value = '';
     }
   }
 
@@ -516,36 +647,66 @@ export default function RubberInventory() {
       {/* HEADER */}
       <header className="mb-6">
         <h1 className="text-xl sm:text-[22px] font-bold tracking-tight">Tồn kho su</h1>
-        <p className="text-ink-soft mt-1.5 text-sm sm:text-base">Theo dõi tồn kho theo loại su, mã hàng, lô sản xuất và kiểm tra thứ tự FIFO.</p>
+        <p className="text-ink-soft mt-1.5 text-sm sm:text-base">Theo dõi tồn kho theo loại su, mã hàng, lô sản xuất, đối chiếu AGV Log và kiểm tra FIFO.</p>
       </header>
 
-      {/* UPLOAD */}
-      <section className="bg-surface border border-line rounded-xl shadow-card p-4 sm:p-5 mb-5">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      {/* UPLOAD SECTION */}
+      <section className="bg-surface border border-line rounded-xl shadow-card p-4 sm:p-5 mb-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="border border-line rounded-xl p-4 bg-canvas flex flex-col justify-between gap-3">
           <div>
-            <h2 className="font-semibold text-[14px]">Dữ liệu tồn kho</h2>
-            <p className="text-xs text-ink-faint mt-1">Nạp file Excel tồn kho để phân tích FIFO.</p>
+            <h2 className="font-semibold text-[14px]">1. File Dữ liệu tồn kho</h2>
+            <p className="text-xs text-ink-faint mt-0.5">File Excel chứa danh sách tồn kho hiện tại.</p>
           </div>
-
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileChange} className="hidden" />
-
-          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 bg-accent text-[#241605] font-semibold text-sm px-4 py-2.5 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed">
-            <UploadCloud size={17} />
-            {loading ? 'Đang đọc file...' : 'Chọn file Excel'}
-          </button>
+          <div className="flex items-center justify-between">
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="inline-flex items-center gap-2 bg-accent text-[#241605] font-semibold text-xs sm:text-sm px-3.5 py-2 rounded-lg hover:opacity-90">
+              <UploadCloud size={16} /> Chọn File Tồn kho
+            </button>
+            {fileName && <span className="text-xs text-ink-soft font-mono truncate max-w-[150px]">📄 {fileName}</span>}
+          </div>
         </div>
 
-        {fileName && <div className="mt-3 text-xs text-ink-soft font-mono">📄 {fileName}</div>}
-        {error && <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm">{error}</div>}
+        <div className="border border-line rounded-xl p-4 bg-canvas flex flex-col justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-[14px]">2. File Log Nhiệm vụ AGV / MES</h2>
+            <p className="text-xs text-ink-faint mt-0.5">File Excel nhật ký gọi/trả hàng của AGV.</p>
+          </div>
+          <input ref={logFileInputRef} type="file" accept=".xlsx,.xls" onChange={handleAgvLogFileChange} className="hidden" />
+          <div className="flex items-center justify-between">
+            <button type="button" onClick={() => logFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center gap-2 bg-surface border border-line text-ink font-semibold text-xs sm:text-sm px-3.5 py-2 rounded-lg hover:bg-canvas">
+              <FileSpreadsheet size={16} /> Chọn File Log AGV
+            </button>
+            {logFileName && <span className="text-xs text-ink-soft font-mono truncate max-w-[150px]">📄 {logFileName}</span>}
+          </div>
+        </div>
+
+        {error && <div className="md:col-span-2 p-3 rounded-lg bg-red-50 border border-red-100 text-red-600 text-sm">{error}</div>}
       </section>
 
-      {/* SUMMARY */}
+      {/* SUMMARY CARDS */}
       {records.length > 0 && (
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
           <SummaryCard label="Mã hàng" value={summary.materialCount} icon={<Package size={17} />} />
           <SummaryCard label="Tồn NORMAL" value={summary.normalQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} icon={<CheckCircle2 size={17} />} />
           <SummaryCard label="Khóa khu kho AGV" value={summary.lockedQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} icon={<Lock size={17} />} />
           <SummaryCard label="Cần xem xét FIFO" value={summary.fifoCount} icon={<AlertTriangle size={17} />} warning={summary.fifoCount > 0} />
+
+          <div
+            onClick={() => abnormalPallets.length > 0 && setIsAbnormalModalOpen(true)}
+            className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between shadow-card ${
+              abnormalPallets.length > 0
+                ? 'bg-red-50 border-red-200 text-red-800 hover:bg-red-100'
+                : 'bg-surface border-line text-ink-faint'
+            }`}
+          >
+            <div>
+              <span className="text-xs font-semibold block">Pallet mất tồn kho</span>
+              <span className="text-base sm:text-lg font-bold mt-0.5 block">{abnormalPallets.length} Pallet</span>
+            </div>
+            <div className={`p-2 rounded-lg ${abnormalPallets.length > 0 ? 'bg-red-200 text-red-700' : 'bg-canvas text-ink-faint'}`}>
+              <AlertOctagon size={18} />
+            </div>
+          </div>
         </section>
       )}
 
@@ -553,13 +714,11 @@ export default function RubberInventory() {
       {records.length > 0 && (
         <section className="bg-surface border border-line rounded-2xl shadow-card p-3 sm:p-4 mb-5">
           <div className="flex flex-col xl:flex-row xl:items-center gap-3">
-            {/* Search */}
             <div className="relative flex-1 min-w-0">
               <Search size={17} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-faint pointer-events-none" />
               <input value={keyword} onChange={e => { setKeyword(e.target.value); setCurrentPage(1); }} placeholder="Tìm mã hàng..." className="w-full h-11 bg-canvas border border-line rounded-xl pl-10 pr-4 text-sm outline-none transition-all focus:border-accent focus:ring-4 focus:ring-accent/10" />
             </div>
 
-            {/* Multiple Select Dropdown cho Loại Su */}
             <div className="relative shrink-0" ref={dropdownRef}>
               <button type="button" onClick={() => setIsTypeDropdownOpen(!isTypeDropdownOpen)} className="h-11 min-w-[160px] max-w-[220px] bg-canvas border border-line rounded-xl pl-3.5 pr-3 text-sm font-medium outline-none transition-all focus:border-accent focus:ring-4 focus:ring-accent/10 flex items-center justify-between gap-2 text-ink">
                 <span className="truncate">{dropdownButtonLabel}</span>
@@ -586,7 +745,6 @@ export default function RubberInventory() {
               )}
             </div>
 
-            {/* FIFO Filter Tab */}
             <div className="flex items-center gap-1 rounded-xl bg-canvas border border-line p-1 shrink-0">
               <button type="button" onClick={() => { setFifoFilter('all'); setCurrentPage(1); }} className={`h-9 px-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${fifoFilter === 'all' ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft hover:text-ink'}`}>
                 Tất cả FIFO
@@ -597,7 +755,6 @@ export default function RubberInventory() {
               </button>
             </div>
 
-            {/* Status Filter Tab */}
             <div className="flex items-center gap-1 rounded-xl bg-canvas border border-line p-1 shrink-0">
               <button type="button" onClick={() => { setStatusFilter('all'); setCurrentPage(1); }} className={`h-9 px-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${statusFilter === 'all' ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft hover:text-ink'}`}>Tất cả</button>
               <button type="button" onClick={() => { setStatusFilter('normal'); setCurrentPage(1); }} className={`h-9 px-2.5 rounded-lg inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium transition-all ${statusFilter === 'normal' ? 'bg-surface text-emerald-600 shadow-sm' : 'text-ink-soft hover:text-emerald-600'}`}>
@@ -614,7 +771,6 @@ export default function RubberInventory() {
               </button>
             </div>
 
-            {/* Nút Đặt lại */}
             <button
               type="button"
               disabled={!isFiltered}
@@ -630,7 +786,6 @@ export default function RubberInventory() {
             </button>
           </div>
 
-          {/* Active Filters Bar */}
           {isFiltered && (
             <div className="mt-3 pt-3 border-t border-line flex flex-wrap items-center gap-2 text-xs text-ink-faint">
               <SlidersHorizontal size={14} />
@@ -732,22 +887,63 @@ export default function RubberInventory() {
         </div>
       )}
 
-      {/* DETAIL MODAL */}
+      {/* MODAL CẢNH BÁO: PALLET BẤT THƯỜNG KHÔNG CÓ TRONG TỒN KHO */}
+      {isAbnormalModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setIsAbnormalModalOpen(false)}>
+          <div className="w-full max-w-4xl bg-surface rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-line bg-red-50 flex items-center justify-between">
+              <div className="flex items-center gap-2.5 text-red-800">
+                <AlertOctagon size={22} className="text-red-600" />
+                <div>
+                  <h2 className="font-bold text-base">Danh sách Pallet bất thường (Mất thông tin tồn kho)</h2>
+                  <p className="text-xs text-red-600 mt-0.5">Các pallet có nhật ký nhập/trả kho gần nhất nhưng không tìm thấy trong file tồn kho hiện tại.</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setIsAbnormalModalOpen(false)} className="w-8 h-8 rounded-lg bg-surface flex items-center justify-center text-ink-soft hover:text-ink">×</button>
+            </div>
+
+            <div className="overflow-y-auto p-5 space-y-3">
+              <div className="overflow-x-auto border border-line rounded-xl">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-canvas border-b border-line text-[11px] font-semibold text-ink-faint uppercase">
+                      <th className="p-3">Pallet ID (RFID)</th>
+                      <th className="p-3">Mã Su / Vật liệu</th>
+                      <th className="p-3">Nghiệp vụ cuối</th>
+                      <th className="p-3">Vị trí kho cuối</th>
+                      <th className="p-3">Trạng thái AGV</th>
+                      <th className="p-3">Thời gian cập nhật</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line font-mono">
+                    {abnormalPallets.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-red-50/50">
+                        <td className="p-3 font-bold text-red-700">{item.palletId}</td>
+                        <td className="p-3">{item.materialName || item.mesCode}</td>
+                        <td className="p-3 font-semibold text-amber-700">{item.businessType}</td>
+                        <td className="p-3">{item.location || '-'}</td>
+                        <td className="p-3">{item.status}</td>
+                        <td className="p-3 text-ink-faint">{formatDateTime(item.updatedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-line bg-canvas text-right">
+              <button type="button" onClick={() => setIsAbnormalModalOpen(false)} className="px-4 py-2 rounded-lg bg-surface border border-line text-sm font-semibold text-ink hover:bg-canvas">
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DETAIL MODAL THÔNG THƯỜNG */}
       {selectedGroup && (
-        <div
-          key={selectedGroup.key}
-          className={`fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 transition-opacity duration-200 ${
-            isModalVisible ? 'opacity-100' : 'opacity-0'
-          }`}
-          onClick={handleCloseModal}
-        >
-          <div
-            className={`w-full max-w-5xl max-h-[90vh] overflow-hidden bg-surface rounded-2xl shadow-2xl flex flex-col transition-all duration-200 transform ${
-              isModalVisible ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-2'
-            }`}
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Modal Header */}
+        <div key={selectedGroup.key} className={`fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4 transition-opacity duration-200 ${isModalVisible ? 'opacity-100' : 'opacity-0'}`} onClick={handleCloseModal}>
+          <div className={`w-full max-w-5xl max-h-[90vh] overflow-hidden bg-surface rounded-2xl shadow-2xl flex flex-col transition-all duration-200 transform ${isModalVisible ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-2'}`} onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-line flex items-start justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2 mb-2">
@@ -760,7 +956,6 @@ export default function RubberInventory() {
               <button type="button" onClick={handleCloseModal} className="w-9 h-9 rounded-lg bg-canvas flex items-center justify-center text-ink-soft hover:text-ink">×</button>
             </div>
 
-            {/* FIFO Explanation & Reason */}
             {selectedGroup.fifoRequired && (
               <div className="mx-5 mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs flex gap-2">
                 <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
@@ -771,7 +966,6 @@ export default function RubberInventory() {
               </div>
             )}
 
-            {/* Content Lots */}
             <div className="overflow-auto p-5 space-y-4">
               {selectedGroup.allLots.map(lot => {
                 const isNormal = lot.status === NORMAL_STATUS;
@@ -780,7 +974,6 @@ export default function RubberInventory() {
 
                 return (
                   <div key={lot.key} className={`border rounded-xl p-4 ${isFirstNormal ? 'border-accent bg-accent/5' : 'border-line bg-canvas'}`}>
-                    {/* Header thông tin Lô */}
                     <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
@@ -793,29 +986,29 @@ export default function RubberInventory() {
                         </div>
                         <div className="font-semibold text-sm mt-2 flex items-center gap-2">
                           <span>Ngày sản xuất: {formatDate(lot.productionDate)}</span>
-                          {lot.batchPrefix && (
-                            <span className="font-mono text-xs text-ink-faint bg-surface border border-line px-1.5 py-0.5 rounded">
-                              ({lot.batchPrefix})
-                            </span>
-                          )}
+                          {lot.batchPrefix && <span className="font-mono text-xs text-ink-faint bg-surface border border-line px-1.5 py-0.5 rounded">({lot.batchPrefix})</span>}
                         </div>
                       </div>
                     </div>
 
-                    {/* Danh sách từng RFID / Thẻ xe */}
                     <div className="space-y-2">
                       {lot.records.map(record => {
                         const expireInfo = getExpirationStatus(record.expireTime);
 
                         return (
-                          <div key={record.id} className="bg-surface border border-line rounded-lg p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs items-center">
+                          <div key={record.id} className="bg-surface border border-line rounded-lg p-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-9 gap-3 text-xs items-center">
                             <InfoItem label="RFID" value={record.rfid} />
                             <InfoItem label="Số xe / Mẻ" value={record.carNo} highlight />
                             <InfoItem label="货位" value={record.location} />
-                            <InfoItem label="剩余量" value={record.remainingQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} />
+                            <InfoItem label="Mã máy (设备)" value={record.machine} highlight={record.isDispatched} />
+                            <InfoItem label="原数量 (Ban đầu)" value={record.originalQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} />
+                            <InfoItem label="剩余量 (Còn lại)" value={record.remainingQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} highlight />
+                            
+                            {/* CỘT NGÀY SẢN XUẤT THÊM MỚI */}
+                            <InfoItem label="生产日期 (NSX)" value={formatDate(record.productionDate)} />
+                            
                             <InfoItem label="入库时间" value={formatDateTime(record.inboundTime)} />
 
-                            {/* CỘT THỜI GIAN QUÁ HẠN / HẠN SỬ DỤNG */}
                             <div>
                               <div className="text-[10px] text-ink-faint mb-0.5">到期时间 (Hạn dùng)</div>
                               <div className="font-medium truncate">{formatDateTime(record.expireTime)}</div>
@@ -828,16 +1021,11 @@ export default function RubberInventory() {
                       })}
                     </div>
 
-                    {/* HÀNG HIỂN THỊ TỔNG PALLET */}
                     <div className="mt-3 pt-2.5 border-t border-line/60 flex items-center justify-between text-xs">
-                      <span className="font-semibold text-ink-soft">
-                        Tổng {lot.records.length} pallet
-                      </span>
+                      <span className="font-semibold text-ink-soft">Tổng {lot.records.length} pallet</span>
                       <div className="flex items-center gap-1.5">
                         <span className="text-ink-faint">Còn lại:</span>
-                        <span className="text-base font-bold text-ink">
-                          {lot.remainingQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}
-                        </span>
+                        <span className="text-base font-bold text-ink">{lot.remainingQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</span>
                       </div>
                     </div>
                   </div>
