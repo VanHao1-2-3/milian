@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { UploadCloud, Download, Copy, Check, RotateCcw, FileSpreadsheet, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function NcCalculator() {
+  const [calcMode, setCalcMode] = useState('nvl'); // 'nvl' | 'btp'
   const [targetNVL, setTargetNVL] = useState('');
   const [targetBTP, setTargetBTP] = useState('');
 
@@ -222,10 +223,9 @@ export default function NcCalculator() {
     return { summaryData: list, grandTotal: total };
   }, [inventoryRows, materialRows]);
 
-  const numNVL = parseFloat(targetNVL) || 0;
-  const numBTP = parseFloat(targetBTP) || 0;
-  const totalTarget = numNVL + numBTP;
-  const diff = grandTotal - totalTarget;
+  // Chọn mục tiêu tương ứng dựa vào nút chọn
+  const activeTarget = calcMode === 'nvl' ? (parseFloat(targetNVL) || 0) : (parseFloat(targetBTP) || 0);
+  const diff = grandTotal - activeTarget;
 
   const handleCopy = async () => {
     if (summaryData.length === 0) return;
@@ -276,14 +276,26 @@ export default function NcCalculator() {
         <p className="text-sm text-[#736d64] mt-1">Gộp dữ liệu từ 2 file và cộng dồn trọng lượng theo từng Mã NC.</p>
       </div>
 
-      <div className="bg-amber-50/60 rounded-2xl p-5 border border-amber-200/80 shadow-sm grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-semibold text-[#3d3935] uppercase tracking-wider mb-1.5">Mục tiêu Nguyên vật liệu (kg)</label>
-          <input type="number" placeholder="Nhập số kg NVL..." value={targetNVL} onChange={(e) => setTargetNVL(e.target.value)} className="w-full px-3.5 py-2 bg-white border border-[#dcd6c8] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#e5a855]" />
+      {/* CHỌN LOẠI TÍNH TOÁN */}
+      <div className="bg-amber-50/60 rounded-2xl p-5 border border-amber-200/80 shadow-sm space-y-4">
+        <div className="flex items-center gap-2 p-1 bg-white/80 rounded-xl border border-[#dcd6c8] w-fit">
+          <button type="button" onClick={() => setCalcMode('nvl')} className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all ${calcMode === 'nvl' ? 'bg-[#e5a855] text-slate-900 shadow-sm' : 'text-[#736d64] hover:text-[#1f1f1f]'}`}>
+            Tính Nguyên Vật Liệu
+          </button>
+          <button type="button" onClick={() => setCalcMode('btp')} className={`px-4 py-1.5 text-xs font-semibold rounded-lg transition-all ${calcMode === 'btp' ? 'bg-[#e5a855] text-slate-900 shadow-sm' : 'text-[#736d64] hover:text-[#1f1f1f]'}`}>
+            Tính Bán Thành Phẩm
+          </button>
         </div>
-        <div>
-          <label className="block text-xs font-semibold text-[#3d3935] uppercase tracking-wider mb-1.5">Mục tiêu Bán thành phẩm (kg)</label>
-          <input type="number" placeholder="Nhập số kg BTP..." value={targetBTP} onChange={(e) => setTargetBTP(e.target.value)} className="w-full px-3.5 py-2 bg-white border border-[#dcd6c8] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#e5a855]" />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className={calcMode === 'nvl' ? 'opacity-100' : 'opacity-50'}>
+            <label className="block text-xs font-semibold text-[#3d3935] uppercase tracking-wider mb-1.5">Mục tiêu Nguyên vật liệu (kg)</label>
+            <input type="number" placeholder="Nhập số kg NVL..." value={targetNVL} onChange={(e) => setTargetNVL(e.target.value)} className="w-full px-3.5 py-2 bg-white border border-[#dcd6c8] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#e5a855]" />
+          </div>
+          <div className={calcMode === 'btp' ? 'opacity-100' : 'opacity-50'}>
+            <label className="block text-xs font-semibold text-[#3d3935] uppercase tracking-wider mb-1.5">Mục tiêu Bán thành phẩm (kg)</label>
+            <input type="number" placeholder="Nhập số kg BTP..." value={targetBTP} onChange={(e) => setTargetBTP(e.target.value)} className="w-full px-3.5 py-2 bg-white border border-[#dcd6c8] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#e5a855]" />
+          </div>
         </div>
       </div>
 
@@ -327,13 +339,13 @@ export default function NcCalculator() {
       <div className="bg-white rounded-2xl border border-[#e8e4d9] shadow-sm p-6 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#f0ece1]">
           <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-[#a0988c]">Số liệu tổng hợp</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#a0988c]">Số liệu tổng hợp ({calcMode === 'nvl' ? 'Nguyên Vật Liệu' : 'Bán Thành Phẩm'})</span>
             <div className="flex items-baseline gap-3 mt-1">
               <div className="text-3xl font-black text-[#1f1f1f]">
                 {grandTotal.toLocaleString('vi-VN', { minimumFractionDigits: 2, maximumFractionDigits: 3 })}
                 <span className="text-base font-normal text-[#736d64] ml-1.5">kg</span>
               </div>
-              {totalTarget > 0 && (
+              {activeTarget > 0 && (
                 <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${Math.abs(diff) < 0.001 ? 'bg-emerald-100 text-emerald-800' : diff > 0 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>
                   {Math.abs(diff) < 0.001 ? 'Khớp 100% mục tiêu' : `Chênh lệch: ${diff > 0 ? '+' : ''}${diff.toLocaleString('vi-VN', { maximumFractionDigits: 2 })} kg`}
                 </span>
