@@ -14,12 +14,15 @@ import {
   SlidersHorizontal,
   X,
   CheckSquare,
-  Square
+  Square,
+  Lock
 } from 'lucide-react';
 import { readWorkbookFile } from '../lib/utils.js';
 
 const ITEMS_PER_PAGE = 15;
 const NORMAL_STATUS = '正常';
+const AGV_LOCKED_STATUS = 'AGV库区锁定';
+const RETURN_COMPONENT_TYPE = '返回部件';
 
 function normalize(value) {
   return String(value ?? '').trim();
@@ -51,6 +54,26 @@ function formatDateTime(value) {
   return new Intl.DateTimeFormat('vi-VN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
 }
 
+// Tính trạng thái quá hạn / còn hạn
+function getExpirationStatus(expireTime) {
+  const expire = parseDate(expireTime);
+  if (!expire) return { text: '-', isExpired: false };
+
+  const now = new Date();
+  const diffHours = Math.round((expire.getTime() - now.getTime()) / (1000 * 60 * 60));
+
+  if (diffHours < 0) {
+    return {
+      text: `Quá hạn ${Math.abs(diffHours)}h`,
+      isExpired: true
+    };
+  }
+  return {
+    text: `Còn ${diffHours}h`,
+    isExpired: false
+  };
+}
+
 // Trích xuất 15 ký tự đầu làm mã lô chính
 function extractBatchPrefix(batchBarcode) {
   if (!batchBarcode) return '';
@@ -58,16 +81,14 @@ function extractBatchPrefix(batchBarcode) {
   return clean.substring(0, 15);
 }
 
-// Trích xuất Số xe/mẻ chuẩn theo cả dạng (1->1) lẫn chuỗi số nối đuôi
+// Trích xuất Số xe/mẻ
 function extractCarNo(batchBarcode) {
   if (!batchBarcode) return '-';
   const clean = String(batchBarcode).trim();
 
-  // Bỏ dấu ngoặc lấy nội dung bên trong
   const matchParen = clean.match(/\((.*?)\)/);
   if (matchParen) return matchParen[1];
 
-  // Nếu không có ngoặc đơn, lấy phần đuôi từ ký tự 16
   if (clean.length > 15) {
     return clean.substring(15);
   }
@@ -171,6 +192,7 @@ function buildMaterialGroups(records) {
         materialName: record.materialName,
         totalRemaining: 0,
         normalRemaining: 0,
+        lockedRemaining: 0,
         normalLots: [],
         allRecords: []
       });
@@ -181,6 +203,8 @@ function buildMaterialGroups(records) {
 
     if (record.status === NORMAL_STATUS) {
       group.normalRemaining += record.remainingQty;
+    } else if (record.status === AGV_LOCKED_STATUS) {
+      group.lockedRemaining += record.remainingQty;
     }
 
     group.allRecords.push(record);
@@ -223,6 +247,7 @@ function buildMaterialGroups(records) {
       lot.records.push(record);
     });
 
+    // Chỉ lấy lô 正常 cho kiểm tra FIFO (bỏ qua AGV库区锁定)
     group.normalLots = Array.from(lotMap.values())
       .filter(lot => lot.status === NORMAL_STATUS)
       .sort((a, b) => {
@@ -238,7 +263,50 @@ function buildMaterialGroups(records) {
     });
 
     group.normalLotCount = group.normalLots.length;
-    group.fifoRequired = group.normalLotCount >= 2;
+
+    // ==========================================
+    // LOGIC CHECK FIFO (BỎ QUA KHÓA AGV)
+    // ==========================================
+    let fifoRequired = false;
+    let fifoWarningReason = '';
+
+    // 1. Kiểm tra su Trả về (返回部件) chỉ trên trạng thái NORMAL
+    if (group.materialType === RETURN_COMPONENT_TYPE || group.materialType.includes('返回')) {
+      const allNormalRecords = group.allRecords
+        .filter(r => r.status === NORMAL_STATUS)
+        .sort((a, b) => (a.productionDate || 0) - (b.productionDate || 0));
+
+      const firstUncalledIndex = allNormalRecords.findIndex(r => !r.machine);
+
+      if (firstUncalledIndex !== -1) {
+        const skippedPallet = allNormalRecords.slice(firstUncalledIndex + 1).find(r => Boolean(r.machine));
+
+        if (skippedPallet) {
+          const olderUncalled = allNormalRecords[firstUncalledIndex];
+          fifoRequired = true;
+          fifoWarningReason = `Bất thường FIFO: Pallet mới (${formatDate(skippedPallet.productionDate)}) đã được máy ${skippedPallet.machine} gọi, nhưng pallet cũ (${formatDate(olderUncalled.productionDate)}) lại bị bỏ qua!`;
+        }
+      }
+    } else {
+      // 2. Đối với su 1M, 2M, 3M NORMAL: Thời gian 2 lô cách nhau >= 8 tiếng mới báo
+      if (group.normalLots.length >= 2) {
+        for (let i = 0; i < group.normalLots.length - 1; i++) {
+          const lot1 = group.normalLots[i];
+          const lot2 = group.normalLots[i + 1];
+          if (lot1.productionDate && lot2.productionDate) {
+            const diffHours = Math.abs(lot2.productionDate - lot1.productionDate) / (1000 * 60 * 60);
+            if (diffHours >= 8) {
+              fifoRequired = true;
+              fifoWarningReason = `Các lô 正常 cách nhau >= 8 tiếng (${Math.round(diffHours)}h). Cần ưu tiên dùng lô cũ trước.`;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    group.fifoRequired = fifoRequired;
+    group.fifoWarningReason = fifoWarningReason;
   }
 
   return Array.from(map.values()).sort((a, b) =>
@@ -247,12 +315,23 @@ function buildMaterialGroups(records) {
 }
 
 function StatusBadge({ status }) {
-  const isNormal = status === NORMAL_STATUS;
-
+  if (status === NORMAL_STATUS) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 whitespace-nowrap">
+        <CheckCircle2 size={12} /> 正常
+      </span>
+    );
+  }
+  if (status === AGV_LOCKED_STATUS) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 whitespace-nowrap">
+        <Lock size={12} /> Khóa AGV
+      </span>
+    );
+  }
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap ${isNormal ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
-      {isNormal ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-      {status || '-'}
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-red-50 text-red-600 whitespace-nowrap">
+      <XCircle size={12} /> {status || '-'}
     </span>
   );
 }
@@ -269,7 +348,7 @@ export default function RubberInventory() {
   const [selectedTypes, setSelectedTypes] = useState([]);
   const [isTypeDropdownOpen, setIsTypeDropdownOpen] = useState(false);
   const [keyword, setKeyword] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'normal' | 'locked' | 'abnormal'
   const [fifoFilter, setFifoFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -310,11 +389,13 @@ export default function RubberInventory() {
       if (!matchType) return false;
 
       const hasNormal = group.allLots.some(lot => lot.status === NORMAL_STATUS);
-      const hasAbnormal = group.allLots.some(lot => lot.status !== NORMAL_STATUS);
+      const hasLocked = group.allLots.some(lot => lot.status === AGV_LOCKED_STATUS);
+      const hasAbnormal = group.allLots.some(lot => lot.status !== NORMAL_STATUS && lot.status !== AGV_LOCKED_STATUS);
 
       const matchStatus =
         statusFilter === 'all' ||
         (statusFilter === 'normal' && hasNormal) ||
+        (statusFilter === 'locked' && hasLocked) ||
         (statusFilter === 'abnormal' && hasAbnormal);
 
       if (!matchStatus) return false;
@@ -338,9 +419,13 @@ export default function RubberInventory() {
       .filter(row => row.status === NORMAL_STATUS)
       .reduce((sum, row) => sum + row.remainingQty, 0);
 
+    const lockedQty = allFilteredRecords
+      .filter(row => row.status === AGV_LOCKED_STATUS)
+      .reduce((sum, row) => sum + row.remainingQty, 0);
+
     const fifoCount = filteredGroups.filter(group => group.fifoRequired).length;
 
-    return { materialCount, totalQty, normalQty, fifoCount };
+    return { materialCount, totalQty, normalQty, lockedQty, fifoCount };
   }, [filteredGroups]);
 
   const totalPages = Math.max(1, Math.ceil(filteredGroups.length / ITEMS_PER_PAGE));
@@ -458,9 +543,9 @@ export default function RubberInventory() {
       {records.length > 0 && (
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <SummaryCard label="Mã hàng" value={summary.materialCount} icon={<Package size={17} />} />
-          <SummaryCard label="Tổng tồn" value={summary.totalQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} icon={<Package size={17} />} />
           <SummaryCard label="Tồn NORMAL" value={summary.normalQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} icon={<CheckCircle2 size={17} />} />
-          <SummaryCard label="Mã có nhiều lô" value={summary.fifoCount} icon={<AlertTriangle size={17} />} warning={summary.fifoCount > 0} />
+          <SummaryCard label="Khóa khu kho AGV" value={summary.lockedQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} icon={<Lock size={17} />} />
+          <SummaryCard label="Cần xem xét FIFO" value={summary.fifoCount} icon={<AlertTriangle size={17} />} warning={summary.fifoCount > 0} />
         </section>
       )}
 
@@ -493,7 +578,7 @@ export default function RubberInventory() {
                     return (
                       <button type="button" key={type} onClick={() => toggleMaterialType(type)} className={`w-full text-left px-3.5 py-2 text-sm flex items-center justify-between hover:bg-canvas transition-colors ${isChecked ? 'font-bold text-accent bg-accent/5' : 'text-ink'}`}>
                         <span className="truncate mr-2">{type}</span>
-                        {isChecked ? <CheckSquare size={15} className="text-accent shrink-0" /> : <Square size={15} className="text-ink-faint shrink-0" />}
+                        {isChecked ? <CheckSquare size={15} className="text-accent shrink-0" /> : <Square size={15} />}
                       </button>
                     );
                   })}
@@ -514,14 +599,18 @@ export default function RubberInventory() {
 
             {/* Status Filter Tab */}
             <div className="flex items-center gap-1 rounded-xl bg-canvas border border-line p-1 shrink-0">
-              <button type="button" onClick={() => { setStatusFilter('all'); setCurrentPage(1); }} className={`h-9 px-3 rounded-lg text-xs sm:text-sm font-medium transition-all ${statusFilter === 'all' ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft hover:text-ink'}`}>Tất cả</button>
-              <button type="button" onClick={() => { setStatusFilter('normal'); setCurrentPage(1); }} className={`h-9 px-3 rounded-lg inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium transition-all ${statusFilter === 'normal' ? 'bg-surface text-emerald-600 shadow-sm' : 'text-ink-soft hover:text-emerald-600'}`}>
+              <button type="button" onClick={() => { setStatusFilter('all'); setCurrentPage(1); }} className={`h-9 px-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all ${statusFilter === 'all' ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft hover:text-ink'}`}>Tất cả</button>
+              <button type="button" onClick={() => { setStatusFilter('normal'); setCurrentPage(1); }} className={`h-9 px-2.5 rounded-lg inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium transition-all ${statusFilter === 'normal' ? 'bg-surface text-emerald-600 shadow-sm' : 'text-ink-soft hover:text-emerald-600'}`}>
                 <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
                 Bình thường
               </button>
-              <button type="button" onClick={() => { setStatusFilter('abnormal'); setCurrentPage(1); }} className={`h-9 px-3 rounded-lg inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium transition-all ${statusFilter === 'abnormal' ? 'bg-surface text-red-600 shadow-sm' : 'text-ink-soft hover:text-red-600'}`}>
+              <button type="button" onClick={() => { setStatusFilter('locked'); setCurrentPage(1); }} className={`h-9 px-2.5 rounded-lg inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium transition-all ${statusFilter === 'locked' ? 'bg-surface text-purple-700 shadow-sm font-semibold' : 'text-ink-soft hover:text-purple-700'}`}>
+                <Lock size={12} className="text-purple-600" />
+                Khóa AGV
+              </button>
+              <button type="button" onClick={() => { setStatusFilter('abnormal'); setCurrentPage(1); }} className={`h-9 px-2.5 rounded-lg inline-flex items-center gap-1.5 text-xs sm:text-sm font-medium transition-all ${statusFilter === 'abnormal' ? 'bg-surface text-red-600 shadow-sm' : 'text-ink-soft hover:text-red-600'}`}>
                 <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
-                Bất thường
+                Khác
               </button>
             </div>
 
@@ -556,7 +645,8 @@ export default function RubberInventory() {
 
               {fifoFilter === 'fifo_required' && <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-semibold border border-amber-200"><AlertTriangle size={12} />Chỉ mã cần kiểm tra FIFO</span>}
               {statusFilter === 'normal' && <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />Bình thường</span>}
-              {statusFilter === 'abnormal' && <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-red-500" />Bất thường</span>}
+              {statusFilter === 'locked' && <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50 text-purple-700 font-semibold border border-purple-200"><Lock size={11} />Khóa khu kho AGV</span>}
+              {statusFilter === 'abnormal' && <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-50 text-red-600 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-red-500" />Bất thường khác</span>}
               {keyword && <span className="max-w-[220px] truncate px-2.5 py-1 rounded-full bg-canvas text-ink-soft font-medium">"{keyword}"</span>}
 
               <span className="ml-auto font-medium whitespace-nowrap">{filteredGroups.length} mã hàng</span>
@@ -577,7 +667,7 @@ export default function RubberInventory() {
                   <th className="py-3 px-4">Trạng thái FIFO</th>
                   <th className="py-3 px-4 text-right">Tổng tồn</th>
                   <th className="py-3 px-4 text-right">Tồn NORMAL</th>
-                  <th className="py-3 px-4 text-center">Số lô</th>
+                  <th className="py-3 px-4 text-right">Tồn Khóa AGV</th>
                   <th className="py-3 px-4 text-center">Thao tác</th>
                 </tr>
               </thead>
@@ -596,7 +686,7 @@ export default function RubberInventory() {
                           <AlertTriangle size={11} /> Cần kiểm tra FIFO
                         </span>
                       ) : (
-                        <span className="text-[11px] text-ink-faint">Standard</span>
+                        <span className="text-[11px] text-ink-faint">Chấp nhận</span>
                       )}
                     </td>
                     <td className="py-3 px-4 text-right font-semibold text-ink whitespace-nowrap">
@@ -605,8 +695,8 @@ export default function RubberInventory() {
                     <td className="py-3 px-4 text-right font-semibold text-emerald-700 whitespace-nowrap">
                       {group.normalRemaining.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}
                     </td>
-                    <td className="py-3 px-4 text-center text-xs text-ink-soft whitespace-nowrap">
-                      {group.normalLotCount} NORMAL / {group.allLots.length} tổng
+                    <td className="py-3 px-4 text-right font-semibold text-purple-700 whitespace-nowrap">
+                      {group.lockedRemaining > 0 ? group.lockedRemaining.toLocaleString('vi-VN', { maximumFractionDigits: 1 }) : '-'}
                     </td>
                     <td className="py-3 px-4 text-center text-ink-faint group-hover:text-accent">
                       <ChevronRight size={18} className="inline-block" />
@@ -652,7 +742,7 @@ export default function RubberInventory() {
           onClick={handleCloseModal}
         >
           <div
-            className={`w-full max-w-4xl max-h-[90vh] overflow-hidden bg-surface rounded-2xl shadow-2xl flex flex-col transition-all duration-200 transform ${
+            className={`w-full max-w-5xl max-h-[90vh] overflow-hidden bg-surface rounded-2xl shadow-2xl flex flex-col transition-all duration-200 transform ${
               isModalVisible ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-2'
             }`}
             onClick={e => e.stopPropagation()}
@@ -662,7 +752,7 @@ export default function RubberInventory() {
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-[11px] font-semibold px-2 py-1 rounded-md bg-canvas">{selectedGroup.materialType}</span>
-                  {selectedGroup.fifoRequired && <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded-md">Có nhiều lô NORMAL</span>}
+                  {selectedGroup.fifoRequired && <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded-md">Cần kiểm tra FIFO</span>}
                 </div>
                 <h2 className="text-lg font-bold">{selectedGroup.materialName}</h2>
                 <p className="text-xs text-ink-faint mt-1">Tổng tồn: {selectedGroup.totalRemaining.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</p>
@@ -670,11 +760,14 @@ export default function RubberInventory() {
               <button type="button" onClick={handleCloseModal} className="w-9 h-9 rounded-lg bg-canvas flex items-center justify-center text-ink-soft hover:text-ink">×</button>
             </div>
 
-            {/* FIFO Explanation */}
+            {/* FIFO Explanation & Reason */}
             {selectedGroup.fifoRequired && (
-              <div className="mx-5 mt-4 p-3 rounded-lg bg-amber-50 border border-amber-100 text-amber-800 text-xs flex gap-2">
-                <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-                <span>Các lô <b>正常</b> được sắp xếp từ ngày sản xuất cũ → mới. Lô cũ nhất được ưu tiên sử dụng theo nguyên tắc FIFO. Các trạng thái khác không tham gia kiểm tra FIFO.</span>
+              <div className="mx-5 mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs flex gap-2">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-600" />
+                <div>
+                  <div className="font-bold mb-0.5">Cảnh báo thứ tự xuất hàng (FIFO):</div>
+                  <div>{selectedGroup.fifoWarningReason || 'Các lô 正常 được sắp xếp từ cũ đến mới. Hãy ưu tiên xuất lô cũ trước.'}</div>
+                </div>
               </div>
             )}
 
@@ -711,15 +804,28 @@ export default function RubberInventory() {
 
                     {/* Danh sách từng RFID / Thẻ xe */}
                     <div className="space-y-2">
-                      {lot.records.map(record => (
-                        <div key={record.id} className="bg-surface border border-line rounded-lg p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
-                          <InfoItem label="RFID" value={record.rfid} />
-                          <InfoItem label="车数" value={record.carNo} highlight />
-                          <InfoItem label="货位" value={record.location} />
-                          <InfoItem label="剩余量" value={record.remainingQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} />
-                          <InfoItem label="入库时间" value={formatDateTime(record.inboundTime)} />
-                        </div>
-                      ))}
+                      {lot.records.map(record => {
+                        const expireInfo = getExpirationStatus(record.expireTime);
+
+                        return (
+                          <div key={record.id} className="bg-surface border border-line rounded-lg p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs items-center">
+                            <InfoItem label="RFID" value={record.rfid} />
+                            <InfoItem label="Số xe / Mẻ" value={record.carNo} highlight />
+                            <InfoItem label="货位" value={record.location} />
+                            <InfoItem label="剩余量" value={record.remainingQty.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} />
+                            <InfoItem label="入库时间" value={formatDateTime(record.inboundTime)} />
+
+                            {/* CỘT THỜI GIAN QUÁ HẠN / HẠN SỬ DỤNG */}
+                            <div>
+                              <div className="text-[10px] text-ink-faint mb-0.5">到期时间 (Hạn dùng)</div>
+                              <div className="font-medium truncate">{formatDateTime(record.expireTime)}</div>
+                              <div className={`mt-0.5 text-[11px] font-semibold ${expireInfo.isExpired ? 'text-red-600' : 'text-emerald-600'}`}>
+                                {expireInfo.text}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
 
                     {/* HÀNG HIỂN THỊ TỔNG PALLET */}
