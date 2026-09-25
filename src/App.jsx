@@ -24,12 +24,7 @@ export default function App() {
     { key: 'home', label: t.navHome, icon: LayoutGrid },
     { key: 'nc-calc', label: t.navNcCalc, hint: t.navNcCalcHint, icon: FlaskConical },
     { key: 'rubber-chinese', label: t.navRubberChinese, hint: t.navRubberChineseHint, icon: BookOpen },
-    {
-      key: 'rubber-inventory',
-      label: t.navRubberInventory,
-      hint: t.navRubberInventoryHint,
-      icon: Package
-    }
+    { key: 'rubber-inventory', label: t.navRubberInventory, hint: t.navRubberInventoryHint, icon: Package }
   ];
 
   return (
