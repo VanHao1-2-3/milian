@@ -39,6 +39,30 @@ function normalize(value) {
   return String(value ?? '').trim();
 }
 
+// Chuẩn hóa RFID để đối chiếu giữa file Excel tồn kho và Log AGV.
+// Excel có thể đọc RFID dạng số (4025018), chuỗi ("4025018"),
+// hoặc chuỗi có khoảng trắng / dấu nháy / đuôi .0.
+function normalizeRfid(value) {
+  if (value === null || value === undefined) return '';
+
+  let text = String(value)
+    .replace(/\u00A0/g, ' ')
+    .trim()
+    .replace(/^'+/, '');
+
+  // Chỉ bỏ .0 khi toàn bộ RFID là số, tránh làm thay đổi RFID dạng chữ.
+  if (/^\d+\.0$/.test(text)) {
+    text = text.slice(0, -2);
+  }
+
+  return text;
+}
+
+function isTransportCompleted(status) {
+  const text = normalize(status).replace(/\s+/g, '');
+  return text.includes('运输完成') && /[（(]4[）)]/.test(text);
+}
+
 function parseNumber(value) {
   if (typeof value === 'number') return value;
   const number = Number(String(value ?? '').replace(/,/g, '').trim());
@@ -454,27 +478,67 @@ export default function RubberInventory() {
   const abnormalPallets = useMemo(() => {
     if (!agvLogs.length) return [];
 
+    // Chỉ lấy nhiệm vụ mới nhất của từng pallet.
     const latestTaskMap = new Map();
 
     agvLogs.forEach(log => {
-      const existing = latestTaskMap.get(log.palletId);
-      if (!existing || (log.updatedAt && existing.updatedAt && log.updatedAt > existing.updatedAt)) {
-        latestTaskMap.set(log.palletId, log);
+      const palletId = normalizeRfid(log.palletId);
+      if (!palletId) return;
+
+      const existing = latestTaskMap.get(palletId);
+
+      if (
+        !existing ||
+        (!existing.updatedAt && log.updatedAt) ||
+        (log.updatedAt && existing.updatedAt && log.updatedAt > existing.updatedAt)
+      ) {
+        latestTaskMap.set(palletId, log);
       }
     });
 
-    const inventoryRfidSet = new Set(records.map(r => r.rfid));
+    // Chuẩn hóa RFID ở cả hai nguồn trước khi đối chiếu.
+    const inventoryRfidSet = new Set(
+      records
+        .map(record => normalizeRfid(record.rfid))
+        .filter(Boolean)
+    );
+
     const result = [];
 
     for (const [palletId, lastLog] of latestTaskMap.entries()) {
-      const isTargetBusiness = TARGET_INBOUND_BUSINESS_TYPES.some(type =>
-        lastLog.businessType.includes(type)
-      );
+      const businessType = normalize(lastLog.businessType);
+      const normalizedPalletId = normalizeRfid(palletId);
 
-      if (isTargetBusiness) {
-        if (!inventoryRfidSet.has(palletId)) {
+      const isReturnMaterial = businessType.includes('返余料');
+      const isOtherInboundBusiness =
+        businessType.includes('密炼自动满料入库') ||
+        businessType.includes('密炼手动满料入库');
+
+      // ===============================
+      // 1. 返余料
+      // ===============================
+      // Chỉ khi AGV đã hoàn thành vận chuyển: (4)运输完成
+      // mới kiểm tra pallet có tồn tại trong file tồn kho hay không.
+      // Nếu chưa hoàn thành / bị hủy / đang tạo nhiệm vụ => bỏ qua.
+      if (isReturnMaterial) {
+        if (!isTransportCompleted(lastLog.status)) {
+          continue;
+        }
+
+        if (!inventoryRfidSet.has(normalizedPalletId)) {
           result.push(lastLog);
         }
+
+        continue;
+      }
+
+      // ===============================
+      // 2. Các nghiệp vụ nhập kho khác
+      // ===============================
+      // Giữ nguyên logic cũ: nếu pallet thuộc nghiệp vụ nhập kho
+      // nhưng không tồn tại trong file tồn kho thì cảnh báo.
+      if (isOtherInboundBusiness && !inventoryRfidSet.has(normalizedPalletId)) {
+        result.push(lastLog);
       }
     }
 
