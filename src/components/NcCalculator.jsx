@@ -36,6 +36,7 @@ export default function NcCalculator() {
   const [status, setStatus] = useState({ msg: '', isError: false });
   const [summary, setSummary] = useState([]);
   const [missingList, setMissingList] = useState([]);
+  const [weightWarnings, setWeightWarnings] = useState([]); // Danh sách xe lệch >= 5kg
   const [hasCalculated, setHasCalculated] = useState(false);
 
   const refInputRef = useRef(null);
@@ -73,6 +74,7 @@ export default function NcCalculator() {
     setProductionLoading(true);
     setSummary([]);
     setMissingList([]);
+    setWeightWarnings([]);
     setHasCalculated(false);
 
     try {
@@ -101,6 +103,50 @@ export default function NcCalculator() {
     }
   }
 
+  /**
+   * Hàm kiểm tra các xe có trọng lượng chênh lệch >= 5kg trong cùng mã hàng
+   */
+  function checkWeightDiscrepancies(rangeRecords) {
+    const grouped = {};
+    rangeRecords.forEach((r) => {
+      const key = r.code || r.baseCode;
+      if (!key) return;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(r);
+    });
+
+    const warnings = [];
+
+    Object.entries(grouped).forEach(([code, rows]) => {
+      if (rows.length < 2) return;
+
+      const weights = rows.map((r) => Number(r.weight || r.netWeight || r.net) || 0);
+      const maxWeight = Math.max(...weights);
+      const minWeight = Math.min(...weights);
+
+      // Nếu chênh lệch giữa xe cao nhất và thấp nhất >= 5kg
+      if (maxWeight - minWeight >= 5) {
+        rows.forEach((r) => {
+          const w = Number(r.weight || r.netWeight || r.net) || 0;
+          // Lưu thông tin xe bị chênh lệch lớn
+          if (maxWeight - w >= 5 || w - minWeight >= 5) {
+            warnings.push({
+              code,
+              carNo: r.carNo || r.seq || r.id || 'N/A',
+              weight: w.toFixed(2),
+              maxWeight: maxWeight.toFixed(2),
+              minWeight: minWeight.toFixed(2),
+              diff: (maxWeight - minWeight).toFixed(2),
+              time: r.endDate ? formatVNDateTime(r.endDate) : 'N/A'
+            });
+          }
+        });
+      }
+    });
+
+    return warnings;
+  }
+
   function onCalculate() {
     if (!records.length) { setMsg(t.msgNoProdFile, true); return; }
     if (!startDateTime || !endDateTime) { setMsg(t.msgNoRange, true); return; }
@@ -111,18 +157,28 @@ export default function NcCalculator() {
       const result = groupProduction(records, startDateTime, endDateTime, ref.ratioMap, ref.codeMap, excluded.codesSet);
       setHasCalculated(true);
 
-      if (!result.rangeRecords.length) {
+      if (!result.rangeRecords || !result.rangeRecords.length) {
         setMsg(t.msgNoDataInRange(formatVNDateTime(startDateTime), formatVNDateTime(endDateTime)), true);
         setSummary([]);
         setMissingList([]);
+        setWeightWarnings([]);
       } else {
         setSummary(result.summary);
         setMissingList(result.missingList);
+
+        // Chạy kiểm tra chênh lệch trọng lượng
+        const warnings = checkWeightDiscrepancies(result.rangeRecords);
+        setWeightWarnings(warnings);
+
         const gNet = result.summary.reduce((s, r) => s + r.net, 0);
         const gCount = result.summary.reduce((s, r) => s + r.count, 0);
         let msg = t.msgCalcDone(result.summary.length, gCount, gNet.toFixed(3));
+        
+        const hasIssue = result.missingList.length > 0 || warnings.length > 0;
         if (result.missingList.length) msg += t.msgMissingAppend(result.missingList.length);
-        setMsg(msg, result.missingList.length > 0);
+        if (warnings.length) msg += ` (Có ${warnings.length} xe chênh lệch trọng lượng ≥ 5kg)`;
+
+        setMsg(msg, hasIssue);
       }
       setIsCalculating(false);
     }, 30);
@@ -147,6 +203,13 @@ export default function NcCalculator() {
       wsData.push([t.xlsxMissingTitle]);
       wsData.push([t.colFullCode, t.colBatchCount, t.colUncountedWeight]);
       missingList.forEach((r) => wsData.push([r.code, r.count, Number(r.total.toFixed(3))]));
+    }
+
+    if (weightWarnings.length) {
+      wsData.push([]);
+      wsData.push(['Danh sách xe chênh lệch trọng lượng ≥ 5kg']);
+      wsData.push(['Mã hàng / Lô', 'Số xe', 'Trọng lượng (kg)', 'Chênh lệch Max-Min (kg)', 'Thời gian']);
+      weightWarnings.forEach((w) => wsData.push([w.code, w.carNo, w.weight, w.diff, w.time]));
     }
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
@@ -197,7 +260,7 @@ export default function NcCalculator() {
         <p className="text-ink-soft mt-1.5 max-w-[70ch]">{t.pageSubtitle}</p>
       </header>
 
-      {/* Bang tra cuu */}
+      {/* Bảng tra cứu */}
       <section className="bg-surface border border-line rounded-xl2 shadow-card p-5 mb-5">
         <div className="flex flex-wrap items-center gap-4">
           <label className="w-56 shrink-0 font-semibold text-[13.5px]">{t.refLabel}</label>
@@ -231,7 +294,7 @@ export default function NcCalculator() {
         )}
       </section>
 
-      {/* Ma loai tru khoi tinh toan */}
+      {/* Mã loại trừ khỏi tính toán */}
       <section className="bg-surface border border-line rounded-xl2 shadow-card p-5 mb-5">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <label className="font-semibold text-[13.5px]">
@@ -297,7 +360,7 @@ export default function NcCalculator() {
         )}
       </section>
 
-      {/* File san xuat + khoang thoi gian */}
+      {/* File sản xuất + khoảng thời gian */}
       <section className="bg-surface border border-line rounded-xl2 shadow-card p-5 mb-5 divide-y divide-line">
         <div className="flex flex-wrap items-center gap-4 pb-4">
           <label className="w-56 shrink-0 font-semibold text-[13.5px]">{t.step1Label}</label>
@@ -334,7 +397,7 @@ export default function NcCalculator() {
         </div>
       </section>
 
-      {/* Ket qua */}
+      {/* Kết quả */}
       <section className="bg-surface border border-line rounded-xl2 shadow-card p-5 mb-5">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h2 className="font-bold text-[15px]">{t.resultTitle}</h2>
@@ -387,9 +450,9 @@ export default function NcCalculator() {
         </div>
       </section>
 
-      {/* Canh bao */}
+      {/* Bảng Cảnh báo 1: Thiếu tỉ lệ phản hồi */}
       {missingList.length > 0 && (
-        <section className="bg-amber-50 border border-amber-300 rounded-xl2 p-5">
+        <section className="bg-amber-50 border border-amber-300 rounded-xl2 p-5 mb-5">
           <h2 className="font-bold text-[14px] flex items-center gap-2 text-amber-900">
             <AlertTriangle size={16} /> {t.warningTitle}
           </h2>
@@ -413,6 +476,49 @@ export default function NcCalculator() {
                     <td className="py-2 px-2.5 border-b border-amber-100 font-mono">{row.code}</td>
                     <td className="py-2 px-2.5 border-b border-amber-100 text-right font-mono">{row.count}</td>
                     <td className="py-2 px-2.5 border-b border-amber-100 text-right font-mono">{row.total.toFixed(3)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Bảng Cảnh báo 2: Chênh lệch trọng lượng xe >= 5kg trong cùng mã hàng */}
+      {weightWarnings.length > 0 && (
+        <section className="bg-red-50 border border-red-300 rounded-xl2 p-5">
+          <h2 className="font-bold text-[14px] flex items-center gap-2 text-red-900">
+            <AlertTriangle size={16} className="text-red-600" />
+            Cảnh báo: Xe có trọng lượng chênh lệch ≥ 5kg cùng mã hàng
+          </h2>
+          <p className="text-[12.5px] text-red-800/80 mt-2 mb-3 leading-relaxed">
+            Phát hiện các xe trong cùng mã hàng có chênh lệch trọng lượng lớn nhất và nhỏ nhất lớn hơn hoặc bằng 5kg:
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[14px]">
+              <thead>
+                <tr className="text-[12.5px] text-red-800 font-semibold border-b border-red-200">
+                  <th className="text-left py-2 px-2.5">Mã hàng</th>
+                  <th className="text-center py-2 px-2.5">Số xe</th>
+                  <th className="text-right py-2 px-2.5">Trọng lượng xe (kg)</th>
+                  <th className="text-right py-2 px-2.5">Chênh lệch Max-Min (kg)</th>
+                  <th className="text-right py-2 px-2.5">Thời gian</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weightWarnings.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-red-100/50">
+                    <td className="py-2 px-2.5 border-b border-red-100 font-mono">{row.code}</td>
+                    <td className="py-2 px-2.5 border-b border-red-100 text-center font-mono">{row.carNo}</td>
+                    <td className="py-2 px-2.5 border-b border-red-100 text-right font-mono font-bold text-red-700">
+                      {row.weight}
+                    </td>
+                    <td className="py-2 px-2.5 border-b border-red-100 text-right font-mono text-red-600">
+                      +{row.diff} kg
+                    </td>
+                    <td className="py-2 px-2.5 border-b border-red-100 text-right font-mono text-ink-soft">
+                      {row.time}
+                    </td>
                   </tr>
                 ))}
               </tbody>
